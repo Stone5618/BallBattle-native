@@ -11,6 +11,7 @@ public class Food {
     public float x;
     public float y;
     public float radius;
+    public float mass = 1f;
     public int color;
     public boolean alive = true;
 
@@ -37,7 +38,8 @@ public class Food {
     public Food(float x, float y) {
         this.x = x;
         this.y = y;
-        this.radius = 5f + (float) (Math.random() * 3f); // 半径 5-8
+        this.radius = 10f;  // 固定10px
+        this.mass = 1f;     // 固定质量1
         this.color = FOOD_COLORS[(int) (Math.random() * FOOD_COLORS.length)];
     }
 

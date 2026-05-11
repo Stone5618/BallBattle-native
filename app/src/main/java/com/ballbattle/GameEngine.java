@@ -21,9 +21,9 @@ public class GameEngine {
     // 世界参数 - 大地图
     public static final int WORLD_WIDTH = 10000;
     public static final int WORLD_HEIGHT = 10000;
-    private static final int FOOD_COUNT = 500;
-    private static final int AI_COUNT = 20;
-    private static final float PLAYER_INITIAL_RADIUS = 30f;
+    private static final int FOOD_COUNT = 3000;
+    private static final int AI_COUNT = 50;
+    private static final float PLAYER_INITIAL_RADIUS = 31.6f;  // mass=10
     private static final float AI_MIN_RADIUS = 20f;
     private static final float AI_MAX_RADIUS = 50f;
     private static final float AI_DIRECTION_CHANGE_INTERVAL = 2f;
@@ -31,6 +31,9 @@ public class GameEngine {
     private static final float AI_DANGER_DETECT_RANGE = 350f;
     private static final float FOOD_RESPAWN_INTERVAL = 0.5f;
     private static final int VIRUS_COUNT = 30;
+    private static final float MIN_MASS_TO_SPLIT = 35f;
+    private static final float SPIT_MASS_COST = 18f;
+    private static final float SPIT_MASS = 16f;
 
     // AI 颜色池
     private static final int[] AI_COLORS = {
@@ -227,7 +230,8 @@ public class GameEngine {
 
     private void randomizeAIDirection(Ball ai) {
         float angle = random.nextFloat() * (float) (2 * Math.PI);
-        ai.setDirection((float) Math.cos(angle), (float) Math.sin(angle));
+        ai.targetDirectionX = (float) Math.cos(angle);
+        ai.targetDirectionY = (float) Math.sin(angle);
         ai.aiDirectionTimer = AI_DIRECTION_CHANGE_INTERVAL;
     }
 
@@ -254,6 +258,18 @@ public class GameEngine {
             if (b.alive) {
                 b.update(deltaTime, WORLD_WIDTH, WORLD_HEIGHT);
                 b.updateMerge(deltaTime);
+            }
+        }
+
+        // 质量衰减（每秒-0.2%）
+        for (Ball pb : playerBalls) {
+            if (pb.alive && pb.mass > 10f) {  // 初始质量不衰减
+                pb.decayMass(deltaTime);
+            }
+        }
+        for (Ball ai : aiBalls) {
+            if (ai.alive && ai.mass > 10f) {
+                ai.decayMass(deltaTime);
             }
         }
 
@@ -442,7 +458,8 @@ public class GameEngine {
                     if (distToPlayer < detectRange) {
                         // 逃跑方向：远离玩家
                         if (distToPlayer > 0.001f) {
-                            ai.setDirection(-dx / distToPlayer, -dy / distToPlayer);
+                            ai.targetDirectionX = -dx / distToPlayer;
+                            ai.targetDirectionY = -dy / distToPlayer;
                             // 逃跑速度+30%
                             float len = (float) Math.sqrt(ai.vx * ai.vx + ai.vy * ai.vy);
                             if (len > 0.001f) {
@@ -457,7 +474,8 @@ public class GameEngine {
                     float chaseRange = AI_FOOD_DETECT_RANGE * 1.5f;
                     if (distToPlayer < chaseRange && ai.radius > nearestPlayerBall.radius + 5f) {
                         if (distToPlayer > 0.001f) {
-                            ai.setDirection(dx / distToPlayer, dy / distToPlayer);
+                            ai.targetDirectionX = dx / distToPlayer;
+                            ai.targetDirectionY = dy / distToPlayer;
                             // 追击速度+20%
                             float len = (float) Math.sqrt(ai.vx * ai.vx + ai.vy * ai.vy);
                             if (len > 0.001f) {
@@ -492,7 +510,8 @@ public class GameEngine {
                         float dx = ai.x - nearestVirus.x;
                         float dy = ai.y - nearestVirus.y;
                         float dist = (float)Math.sqrt(dx*dx + dy*dy);
-                        ai.setDirection(dx / dist, dy / dist);
+                        ai.targetDirectionX = dx / dist;
+                        ai.targetDirectionY = dy / dist;
                         hasTarget = true;
                     }
                 }
@@ -506,7 +525,8 @@ public class GameEngine {
                     float dy = ai.y - dangerBall.y;
                     float dist = (float) Math.sqrt(dx * dx + dy * dy);
                     if (dist > 0.001f) {
-                        ai.setDirection(dx / dist, dy / dist);
+                        ai.targetDirectionX = dx / dist;
+                        ai.targetDirectionY = dy / dist;
                         hasTarget = true;
                     }
                 }
@@ -520,7 +540,8 @@ public class GameEngine {
                     float dy = nearestFood.y - ai.y;
                     float dist = (float) Math.sqrt(dx * dx + dy * dy);
                     if (dist > 0.001f) {
-                        ai.setDirection(dx / dist, dy / dist);
+                        ai.targetDirectionX = dx / dist;
+                        ai.targetDirectionY = dy / dist;
                         hasTarget = true;
                     }
                 }
@@ -531,6 +552,7 @@ public class GameEngine {
                 randomizeAIDirection(ai);
             }
 
+            ai.updateAIDirection(deltaTime);
             ai.update(deltaTime, WORLD_WIDTH, WORLD_HEIGHT);
         }
     }
@@ -598,8 +620,8 @@ public class GameEngine {
 
                 if (dist < playerBall.radius) {
                     food.alive = false;
-                    playerBall.grow(food.radius * food.radius);
-                    playerBall.score += (int) (food.radius * 2);
+                    playerBall.grow(food.mass);  // 质量直接相加
+                    playerBall.score += (int)(food.mass * 2);
                     eatFoodCount++;
                     // 触发食物被吃事件
                     if (eventCallback != null) {
@@ -624,8 +646,8 @@ public class GameEngine {
 
             if (dist < ball.radius) {
                 food.alive = false;
-                ball.grow(food.radius * food.radius);
-                ball.score += (int) (food.radius * 2);
+                ball.grow(food.mass);  // 质量直接相加
+                ball.score += (int)(food.mass * 2);
             }
         }
     }
@@ -640,7 +662,7 @@ public class GameEngine {
 
                 if (playerBall.canEat(ai)) {
                     ai.alive = false;
-                    playerBall.grow(ai.radius * ai.radius * 0.8f);
+                    playerBall.grow(ai.mass);  // 100%质量转移
                     playerBall.score += ai.score + 50;
                     killCount++;
                     // 触发球被吃事件
@@ -655,7 +677,7 @@ public class GameEngine {
                     // 无敌状态下不会被吃
                     if (playerBall.invincible) continue;
                     playerBall.alive = false;
-                    ai.grow(playerBall.radius * playerBall.radius * 0.8f);
+                    ai.grow(playerBall.mass);  // 100%质量转移
                     ai.score += playerBall.score + 50;
                     // 触发球被吃事件
                     if (eventCallback != null) {
@@ -676,11 +698,11 @@ public class GameEngine {
 
                 if (a.canEat(b)) {
                     b.alive = false;
-                    a.grow(b.radius * b.radius * 0.8f);
+                    a.grow(b.mass);  // 100%质量转移
                     a.score += b.score + 50;
                 } else if (b.canEat(a)) {
                     a.alive = false;
-                    b.grow(a.radius * a.radius * 0.8f);
+                    b.grow(a.mass);  // 100%质量转移
                     b.score += a.score + 50;
                 }
             }
@@ -748,15 +770,21 @@ public class GameEngine {
         int splitCount = Math.min(4, MAX_SPLIT_COUNT - playerBalls.size());
         if (splitCount <= 0) {
             // 没有分身名额，直接缩小
-            ball.radius = (float)(ball.radius / Math.sqrt(2));
+            ball.mass /= 2f;
+            ball.radius = 10f * (float)Math.sqrt(ball.mass);
+            ball.speed = ball.calculateSpeed();
             return;
         }
 
-        float newRadius = (float)(ball.radius / Math.sqrt(splitCount + 1));
-        ball.radius = newRadius;
+        float newMass = ball.mass / (splitCount + 1);
+        ball.mass = newMass;
+        ball.radius = 10f * (float)Math.sqrt(ball.mass);
+        ball.speed = ball.calculateSpeed();
 
         for (int i = 0; i < splitCount; i++) {
-            Ball newBall = new Ball(ball.x, ball.y, newRadius, ball.color, ball.name);
+            Ball newBall = new Ball(ball.x, ball.y, 10f * (float)Math.sqrt(newMass), ball.color, ball.name);
+            newBall.mass = newMass;
+            newBall.speed = newBall.calculateSpeed();
             newBall.isMainBall = false;
             newBall.ballIndex = playerBalls.size();
             newBall.mergeTimer = 0f;
@@ -865,9 +893,9 @@ public class GameEngine {
     public boolean canSplit() {
         if (splitCooldownTimer > 0) return false;
         if (playerBalls.size() >= MAX_SPLIT_COUNT) return false;
-        // 检查是否有足够大的球可以分裂
+        // 检查是否有足够质量的球可以分裂
         for (Ball b : playerBalls) {
-            if (b.alive && b.radius >= 30f) return true;
+            if (b.alive && b.mass >= MIN_MASS_TO_SPLIT) return true;
         }
         return false;
     }
@@ -886,14 +914,18 @@ public class GameEngine {
         List<Ball> newBalls = new ArrayList<>();
 
         for (Ball b : playerBalls) {
-            if (!b.alive || b.radius < 30f) continue;
+            if (!b.alive || b.mass < MIN_MASS_TO_SPLIT) continue;
             if (playerBalls.size() + newBalls.size() >= MAX_SPLIT_COUNT) break;
 
-            // 分裂
-            float newRadius = (float)(b.radius / Math.sqrt(2));
-            b.radius = newRadius;
+            // 分裂：质量减半
+            float newMass = b.mass / 2f;
+            b.mass = newMass;
+            b.radius = 10f * (float)Math.sqrt(b.mass);
+            b.speed = b.calculateSpeed();
 
-            Ball newBall = new Ball(b.x, b.y, newRadius, b.color, b.name);
+            Ball newBall = new Ball(b.x, b.y, 10f * (float)Math.sqrt(newMass), b.color, b.name);
+            newBall.mass = newMass;
+            newBall.speed = newBall.calculateSpeed();
             newBall.isMainBall = false;
             newBall.ballIndex = playerBalls.size() + newBalls.size();
             newBall.mergeTimer = 0f;
@@ -919,8 +951,7 @@ public class GameEngine {
      */
     public boolean canSpit() {
         if (spitCooldownTimer > 0) return false;
-        // 检查主球是否有足够体积
-        if (player != null && player.alive && player.radius > SPIT_RADIUS * 2) {
+        if (player != null && player.alive && player.mass >= MIN_MASS_TO_SPLIT) {
             return true;
         }
         return false;
@@ -939,28 +970,24 @@ public class GameEngine {
         }
 
         // 主球吐球
-        if (player != null && player.alive && player.radius > SPIT_RADIUS * 2) {
-            // 减少体积
-            float oldArea = (float)(Math.PI * player.radius * player.radius);
-            float spitArea = (float)(Math.PI * SPIT_RADIUS * SPIT_RADIUS);
-            float newArea = oldArea - spitArea;
-            if (newArea > 0) {
-                player.radius = (float)Math.sqrt(newArea / Math.PI);
+        if (player != null && player.alive && player.mass >= MIN_MASS_TO_SPLIT) {
+            player.mass -= SPIT_MASS_COST;  // 消耗18质量
+            player.radius = 10f * (float)Math.sqrt(player.mass);
+            player.speed = player.calculateSpeed();
 
-                // 创建吐出的球（作为特殊食物）
-                float spitX = player.x + player.directionX * (player.radius + SPIT_RADIUS + 5);
-                float spitY = player.y + player.directionY * (player.radius + SPIT_RADIUS + 5);
+            float spitX = player.x + player.directionX * (player.radius + 15f);
+            float spitY = player.y + player.directionY * (player.radius + 15f);
 
-                Food spitFood = new Food(spitX, spitY);
-                spitFood.radius = SPIT_RADIUS;
-                spitFood.color = player.color;
-                spitFood.isSpitBall = true;
-                spitFood.vx = player.directionX * SPIT_SPEED;
-                spitFood.vy = player.directionY * SPIT_SPEED;
-                spitFood.spitLifeTime = 2f;  // 2秒后变成普通食物
+            Food spitFood = new Food(spitX, spitY);
+            spitFood.radius = 10f * (float)Math.sqrt(SPIT_MASS);  // mass=16, radius=40
+            spitFood.mass = SPIT_MASS;
+            spitFood.color = player.color;
+            spitFood.isSpitBall = true;
+            spitFood.vx = player.directionX * SPIT_SPEED;
+            spitFood.vy = player.directionY * SPIT_SPEED;
+            spitFood.spitLifeTime = 2f;
 
-                foods.add(spitFood);
-            }
+            foods.add(spitFood);
         }
     }
 

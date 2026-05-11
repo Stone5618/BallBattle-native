@@ -19,18 +19,18 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
 
     private static final int TARGET_FPS = 60;
     private static final float FRAME_TIME = 1f / TARGET_FPS;
-    private static final int GRID_SIZE = 100;
+    private static final int GRID_SIZE = 50;
     private static final int BORDER_WIDTH = 4;
 
-    // 虚拟摇杆参数 - 优化后更大更美观
-    private static final float JOYSTICK_RADIUS = 100f;
-    private static final float JOYSTICK_CENTER_RADIUS = 42f;
+    // 虚拟摇杆参数 - 跟随手指模式
+    private static final float JOYSTICK_RADIUS = 65f;
+    private static final float JOYSTICK_CENTER_RADIUS = 28f;
     private static final float JOYSTICK_MARGIN = 80f;
-    private static final float JOYSTICK_STROKE_WIDTH = 4f;
+    private static final float JOYSTICK_STROKE_WIDTH = 3f;
 
     // 按钮参数
-    private static final float BUTTON_SIZE = 70f;
-    private static final float BUTTON_MARGIN = 20f;
+    private static final float BUTTON_SIZE = 55f;
+    private static final float BUTTON_MARGIN = 15f;
 
     private SurfaceHolder holder;
     private GameEngine engine;
@@ -169,10 +169,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         switch (action) {
             case MotionEvent.ACTION_DOWN:
             case MotionEvent.ACTION_POINTER_DOWN:
-                // 检查是否点击按钮
+                // 先检查按钮（优先）
                 float x = event.getX(pointerIndex);
                 float y = event.getY(pointerIndex);
-                
+
                 if (isInSplitButton(x, y)) {
                     engine.split();
                     splitButtonScale = 0.85f;
@@ -183,13 +183,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
                     spitButtonScale = 0.85f;
                     return true;
                 }
-                
-                // 检查是否按在摇杆区域（左下角）
-                if (isInJoystickArea(x, y) && !joystickActive) {
+
+                // 左半屏幕触发摇杆
+                if (x < screenWidth * 0.5f && !joystickActive) {
                     joystickActive = true;
                     joystickPointerId = pointerId;
-                    joystickCenterX = x;
+                    joystickCenterX = x;  // 摇杆出现在手指位置
                     joystickCenterY = y;
+                    joystickStickX = x;   // 把手也在手指位置
+                    joystickStickY = y;
                     updateJoystickStick(x, y);
                     return true;
                 }
@@ -227,12 +229,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
      * 检查触摸点是否在摇杆区域
      */
     private boolean isInJoystickArea(float x, float y) {
-        // 左下角区域
-        float defaultCenterX = JOYSTICK_MARGIN + JOYSTICK_RADIUS;
-        float defaultCenterY = screenHeight - JOYSTICK_MARGIN - JOYSTICK_RADIUS;
-        float dist = (float) Math.sqrt((x - defaultCenterX) * (x - defaultCenterX) 
-                + (y - defaultCenterY) * (y - defaultCenterY));
-        return dist < JOYSTICK_RADIUS * 2;
+        // 屏幕左半边都是摇杆区域（排除按钮区域）
+        return x < screenWidth * 0.5f;
     }
 
     /**
@@ -881,25 +879,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
     }
 
     /**
-     * 绘制虚拟摇杆 - 优化后：更大、更美观、有方向指示和按下效果
+     * 绘制虚拟摇杆 - 跟随手指模式，不活跃时不绘制
      */
     private void drawJoystick(Canvas canvas) {
-        float centerX, centerY;
+        if (!joystickActive) return;  // 不活跃时不绘制
 
-        if (joystickActive) {
-            centerX = joystickCenterX;
-            centerY = joystickCenterY;
-        } else {
-            centerX = JOYSTICK_MARGIN + JOYSTICK_RADIUS;
-            centerY = screenHeight - JOYSTICK_MARGIN - JOYSTICK_RADIUS;
-        }
+        float centerX = joystickCenterX;
+        float centerY = joystickCenterY;
 
         // 绘制外圈背景（半透明黑）
         canvas.drawCircle(centerX, centerY, JOYSTICK_RADIUS, joystickBgPaint);
 
         // 绘制外圈描边（白色半透明）
         Paint strokePaint = new Paint();
-        strokePaint.setColor(joystickActive ? 0x80FFFFFF : 0x50FFFFFF);
+        strokePaint.setColor(0x80FFFFFF);
         strokePaint.setStyle(Paint.Style.STROKE);
         strokePaint.setStrokeWidth(JOYSTICK_STROKE_WIDTH);
         strokePaint.setAntiAlias(true);
@@ -914,17 +907,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         canvas.drawCircle(centerX, centerY, JOYSTICK_RADIUS * 0.6f, dashPaint);
 
         // 计算把手位置
-        float stickX = joystickActive ? joystickStickX : centerX;
-        float stickY = joystickActive ? joystickStickY : centerY;
+        float stickX = joystickStickX;
+        float stickY = joystickStickY;
 
         // 绘制方向指示线（从中心到把手）
-        if (joystickActive) {
-            Paint linePaint = new Paint();
-            linePaint.setColor(0x40FFFFFF);
-            linePaint.setStrokeWidth(3f);
-            linePaint.setAntiAlias(true);
-            canvas.drawLine(centerX, centerY, stickX, stickY, linePaint);
-        }
+        Paint linePaint = new Paint();
+        linePaint.setColor(0x40FFFFFF);
+        linePaint.setStrokeWidth(3f);
+        linePaint.setAntiAlias(true);
+        canvas.drawLine(centerX, centerY, stickX, stickY, linePaint);
 
         // 绘制把手外圈（灰色边框）
         Paint stickBorderPaint = new Paint();

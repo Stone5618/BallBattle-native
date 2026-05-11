@@ -19,17 +19,25 @@ public class Ball {
     public boolean alive = true;
     public int score = 0;
 
+    // 质量系统
+    public float mass = 10f;
+
     // AI 相关
     public float aiDirectionTimer = 0f;
     public float aiTargetX;
     public float aiTargetY;
     public boolean isAI = false;
 
+    // AI 平滑转向
+    public float targetDirectionX = 0f;
+    public float targetDirectionY = 0f;
+    private static final float AI_TURN_SPEED = 5f;  // 转向速度（越大越快）
+
     // 分身相关
     public boolean isMainBall = true;      // 是否是主球
     public int ballIndex = 0;               // 分身索引
     public float mergeTimer = 0f;           // 合并计时器
-    public static final float MERGE_TIME = 16f;  // 16秒后合并
+    public static final float MERGE_TIME = 30f;  // 30秒后合并
     public float directionX = 0f;           // 当前移动方向X
     public float directionY = 0f;           // 当前移动方向Y
 
@@ -38,7 +46,7 @@ public class Ball {
     public float invincibleTimer = 0f;
 
     private static final float MIN_RADIUS = 15f;
-    private static final float MAX_RADIUS = 200f;
+    private static final float MAX_RADIUS = 1500f;  // 对应mass=22500
 
     public Ball(float x, float y, float radius, int color, String name) {
         this.x = x;
@@ -46,9 +54,19 @@ public class Ball {
         this.radius = Math.max(MIN_RADIUS, radius);
         this.color = color;
         this.name = name;
-        this.speed = 200f;
+        this.mass = radius * radius / 100f;  // mass = (radius/10)^2
+        this.speed = calculateSpeed();
         this.vx = 0f;
         this.vy = 0f;
+    }
+
+    /**
+     * 计算速度（指数衰减）
+     */
+    public float calculateSpeed() {
+        float baseSpeed = 250f;
+        // 指数衰减：speed = baseSpeed * 0.98^(mass/100)
+        return baseSpeed * (float)Math.pow(0.98, mass / 100f);
     }
 
     /**
@@ -118,17 +136,52 @@ public class Ball {
     }
 
     /**
-     * 增长（吃掉食物或其他球）
-     * @param amount 增长的面积
+     * 增长（吃掉食物或其他球）- 基于质量
+     * @param massGain 获得的质量
      */
-    public void grow(float amount) {
-        float area = radius * radius + amount;
-        radius = (float) Math.sqrt(area);
+    public void grow(float massGain) {
+        mass += massGain;
+        radius = 10f * (float)Math.sqrt(mass);
         if (radius > MAX_RADIUS) {
             radius = MAX_RADIUS;
+            mass = radius * radius / 100f;
         }
-        // 球越大速度越慢
-        speed = Math.max(80f, 200f - (radius - 30f) * 0.5f);
+        speed = calculateSpeed();
+    }
+
+    /**
+     * 质量衰减（每秒损失0.2%质量）
+     * @param deltaTime 帧间隔时间（秒）
+     */
+    public void decayMass(float deltaTime) {
+        mass *= Math.pow(0.998, deltaTime);
+        radius = 10f * (float)Math.sqrt(mass);
+        speed = calculateSpeed();
+    }
+
+    /**
+     * AI 平滑转向（仅AI使用）
+     * @param deltaTime 帧间隔时间（秒）
+     */
+    public void updateAIDirection(float deltaTime) {
+        if (!isAI) return;
+        float dx = targetDirectionX - directionX;
+        float dy = targetDirectionY - directionY;
+        float dist = (float)Math.sqrt(dx*dx + dy*dy);
+        if (dist > 0.01f) {
+            float step = AI_TURN_SPEED * deltaTime;
+            if (step > dist) step = dist;
+            directionX += (dx / dist) * step;
+            directionY += (dy / dist) * step;
+            // 重新归一化
+            float len = (float)Math.sqrt(directionX*directionX + directionY*directionY);
+            if (len > 0.001f) {
+                directionX /= len;
+                directionY /= len;
+            }
+            vx = directionX * speed;
+            vy = directionY * speed;
+        }
     }
 
     /**
@@ -155,16 +208,14 @@ public class Ball {
      */
     public void mergeWith(Ball other) {
         if (other == null) return;
-        // 面积相加
-        float newArea = (float)(Math.PI * this.radius * this.radius + Math.PI * other.radius * other.radius);
-        this.radius = (float)Math.sqrt(newArea / Math.PI);
-        // 限制最大半径
-        if (this.radius > MAX_RADIUS) {
-            this.radius = MAX_RADIUS;
+        mass += other.mass;
+        radius = 10f * (float)Math.sqrt(mass);
+        if (radius > MAX_RADIUS) {
+            radius = MAX_RADIUS;
+            mass = radius * radius / 100f;
         }
         this.score += other.score;
-        // 更新速度
-        speed = Math.max(80f, 200f - (radius - 30f) * 0.5f);
+        speed = calculateSpeed();
     }
 
     /**
@@ -220,14 +271,15 @@ public class Ball {
     }
 
     /**
-     * 检测两个球是否碰撞（大球吃小球条件）
+     * 检测两个球是否碰撞（基于质量判断）
      * @param other 另一个球
      * @return true 如果当前球可以吃掉另一个球
      */
     public boolean canEat(Ball other) {
-        if (!alive || !other.alive) return false;
-        if (radius - other.radius <= 5f) return false;
-
+        if (!other.alive) return false;
+        // 需要比对方大25%质量才能吃
+        if (mass < other.mass * 1.25f) return false;
+        // 距离检测
         float dx = x - other.x;
         float dy = y - other.y;
         float dist = (float) Math.sqrt(dx * dx + dy * dy);
