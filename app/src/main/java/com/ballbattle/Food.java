@@ -14,6 +14,12 @@ public class Food {
     public int color;
     public boolean alive = true;
 
+    // 吐球相关
+    public boolean isSpitBall = false;
+    public float vx = 0f;
+    public float vy = 0f;
+    public float spitLifeTime = 0f;
+
     // 食物颜色池
     private static final int[] FOOD_COLORS = {
             0xFFFF4444, // 红

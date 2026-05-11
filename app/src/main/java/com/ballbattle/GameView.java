@@ -26,6 +26,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
     private static final float JOYSTICK_CENTER_RADIUS = 30f;
     private static final float JOYSTICK_MARGIN = 100f;
 
+    // 按钮参数
+    private static final float BUTTON_SIZE = 70f;
+    private static final float BUTTON_MARGIN = 20f;
+
     private SurfaceHolder holder;
     private GameEngine engine;
     private GameThread gameThread;
@@ -40,6 +44,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
     private final Paint ballPaint = new Paint();
     private final Paint joystickBgPaint = new Paint();
     private final Paint joystickStickPaint = new Paint();
+    private final Paint buttonPaint = new Paint();
+    private final Paint buttonTextPaint = new Paint();
 
     // 屏幕尺寸
     private int screenWidth = 0;
@@ -123,6 +129,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         joystickStickPaint.setColor(0x80FFFFFF);
         joystickStickPaint.setStyle(Paint.Style.FILL);
         joystickStickPaint.setAntiAlias(true);
+
+        // 按钮画笔
+        buttonPaint.setStyle(Paint.Style.FILL);
+        buttonPaint.setAntiAlias(true);
+        buttonTextPaint.setColor(0xFFFFFFFF);
+        buttonTextPaint.setTextSize(36f);
+        buttonTextPaint.setTextAlign(Paint.Align.CENTER);
+        buttonTextPaint.setAntiAlias(true);
     }
 
     @Override
@@ -134,10 +148,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         switch (action) {
             case MotionEvent.ACTION_DOWN:
             case MotionEvent.ACTION_POINTER_DOWN:
-                // 检查是否按在摇杆区域（左下角）
+                // 检查是否点击按钮
                 float x = event.getX(pointerIndex);
                 float y = event.getY(pointerIndex);
                 
+                if (isInSplitButton(x, y)) {
+                    engine.split();
+                    return true;
+                }
+                if (isInSpitButton(x, y)) {
+                    engine.spit();
+                    return true;
+                }
+                
+                // 检查是否按在摇杆区域（左下角）
                 if (isInJoystickArea(x, y) && !joystickActive) {
                     joystickActive = true;
                     joystickPointerId = pointerId;
@@ -186,6 +210,29 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         float dist = (float) Math.sqrt((x - defaultCenterX) * (x - defaultCenterX) 
                 + (y - defaultCenterY) * (y - defaultCenterY));
         return dist < JOYSTICK_RADIUS * 2;
+    }
+
+    /**
+     * 检查触摸点是否在分裂按钮区域
+     */
+    private boolean isInSplitButton(float x, float y) {
+        float splitX = screenWidth - BUTTON_MARGIN - BUTTON_SIZE;
+        float splitY = screenHeight - BUTTON_MARGIN - BUTTON_SIZE;
+        float dx = x - splitX;
+        float dy = y - splitY;
+        return Math.sqrt(dx*dx + dy*dy) < BUTTON_SIZE;
+    }
+
+    /**
+     * 检查触摸点是否在吐球按钮区域
+     */
+    private boolean isInSpitButton(float x, float y) {
+        float splitX = screenWidth - BUTTON_MARGIN - BUTTON_SIZE;
+        float spitX = splitX - BUTTON_SIZE * 2 - 10f;
+        float splitY = screenHeight - BUTTON_MARGIN - BUTTON_SIZE;
+        float dx = x - spitX;
+        float dy = y - splitY;
+        return Math.sqrt(dx*dx + dy*dy) < BUTTON_SIZE;
     }
 
     /**
@@ -391,9 +438,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
             ai.draw(canvas, ballPaint, cameraX, cameraY, (int)viewWidth, (int)viewHeight);
         }
 
-        // 7. 玩家
-        if (engine.player != null && engine.player.alive) {
-            engine.player.draw(canvas, ballPaint, cameraX, cameraY, (int)viewWidth, (int)viewHeight);
+        // 7. 玩家球（包括分身）
+        List<Ball> playerBalls = engine.getAlivePlayerBalls();
+        for (Ball playerBall : playerBalls) {
+            playerBall.draw(canvas, ballPaint, cameraX, cameraY, (int)viewWidth, (int)viewHeight);
         }
         
         // 恢复画布状态
@@ -405,10 +453,16 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         // 9. HUD（不缩放）
         drawHUD(canvas);
 
-        // 10. 小地图（不缩放）
+        // 10. 排行榜（不缩放）
+        drawLeaderboard(canvas);
+
+        // 11. 小地图（不缩放）
         drawMinimap(canvas);
 
-        // 11. 虚拟摇杆（不缩放）
+        // 12. 按钮（不缩放）
+        drawButtons(canvas);
+
+        // 13. 虚拟摇杆（不缩放）
         drawJoystick(canvas);
     }
 
@@ -522,12 +576,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
             canvas.drawCircle(mx, my, dotSize, minimapPaint);
         }
 
-        // 玩家
-        if (engine.player != null && engine.player.alive) {
-            float px = minimapX + engine.player.x * scaleX;
-            float py = minimapY + engine.player.y * scaleY;
-            minimapPaint.setColor(0xFF44FF44);
-            float dotSize = Math.max(3f, engine.player.radius * scaleX * 0.5f);
+        // 玩家球（包括分身）
+        List<Ball> playerBalls = engine.getAlivePlayerBalls();
+        for (Ball playerBall : playerBalls) {
+            float px = minimapX + playerBall.x * scaleX;
+            float py = minimapY + playerBall.y * scaleY;
+            minimapPaint.setColor(playerBall.color);
+            float dotSize = Math.max(3f, playerBall.radius * scaleX * 0.5f);
             canvas.drawCircle(px, py, dotSize, minimapPaint);
         }
     }
@@ -570,17 +625,21 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
      * 绘制危险红边警告
      */
     private void drawDangerWarning(Canvas canvas) {
-        if (engine.player == null || !engine.player.alive) return;
+        List<Ball> playerBalls = engine.getAlivePlayerBalls();
+        if (playerBalls.isEmpty()) return;
+        
         float dangerLevel = 0f;
-        for (Ball ai : engine.getAliveAIBalls()) {
-            if (ai.radius > engine.player.radius + 5f) {
-                float dx = ai.x - engine.player.x;
-                float dy = ai.y - engine.player.y;
-                float dist = (float)Math.sqrt(dx*dx + dy*dy);
-                float dangerDist = 300f;
-                if (dist < dangerDist) {
-                    float level = 1f - dist / dangerDist;
-                    if (level > dangerLevel) dangerLevel = level;
+        for (Ball playerBall : playerBalls) {
+            for (Ball ai : engine.getAliveAIBalls()) {
+                if (ai.radius > playerBall.radius + 5f) {
+                    float dx = ai.x - playerBall.x;
+                    float dy = ai.y - playerBall.y;
+                    float dist = (float)Math.sqrt(dx*dx + dy*dy);
+                    float dangerDist = 300f;
+                    if (dist < dangerDist) {
+                        float level = 1f - dist / dangerDist;
+                        if (level > dangerLevel) dangerLevel = level;
+                    }
                 }
             }
         }
@@ -617,5 +676,79 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         float stickX = joystickActive ? joystickStickX : centerX;
         float stickY = joystickActive ? joystickStickY : centerY;
         canvas.drawCircle(stickX, stickY, JOYSTICK_CENTER_RADIUS, joystickStickPaint);
+    }
+
+    /**
+     * 绘制按钮（分裂和吐球）
+     */
+    private void drawButtons(Canvas canvas) {
+        // 分裂按钮（右下角）
+        float splitX = screenWidth - BUTTON_MARGIN - BUTTON_SIZE;
+        float splitY = screenHeight - BUTTON_MARGIN - BUTTON_SIZE;
+        buttonPaint.setColor(0x80000000);
+        canvas.drawCircle(splitX, splitY, BUTTON_SIZE, buttonPaint);
+        buttonPaint.setColor(0xFFFFFFFF);
+        buttonPaint.setStyle(Paint.Style.STROKE);
+        buttonPaint.setStrokeWidth(3f);
+        canvas.drawCircle(splitX, splitY, BUTTON_SIZE, buttonPaint);
+        buttonPaint.setStyle(Paint.Style.FILL);
+        buttonTextPaint.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText("-", splitX, splitY + 12f, buttonTextPaint);
+
+        // 吐球按钮（分裂按钮左边）
+        float spitX = splitX - BUTTON_SIZE * 2 - 10f;
+        buttonPaint.setColor(0x80000000);
+        canvas.drawCircle(spitX, splitY, BUTTON_SIZE, buttonPaint);
+        buttonPaint.setColor(0xFFFFFF00);
+        buttonPaint.setStyle(Paint.Style.STROKE);
+        canvas.drawCircle(spitX, splitY, BUTTON_SIZE, buttonPaint);
+        buttonPaint.setStyle(Paint.Style.FILL);
+        canvas.drawText("o", spitX, splitY + 12f, buttonTextPaint);
+    }
+
+    /**
+     * 绘制排行榜
+     */
+    private void drawLeaderboard(Canvas canvas) {
+        List<GameEngine.RankEntry> board = engine.getLeaderboard();
+        if (board.isEmpty()) return;
+
+        float boardX = screenWidth - 170f;
+        float boardY = 60f;
+        float lineHeight = 28f;
+
+        // 背景
+        Paint bgPaint = new Paint();
+        bgPaint.setColor(0x60000000);
+        bgPaint.setStyle(Paint.Style.FILL);
+        canvas.drawRect(boardX - 10, boardY - 35, boardX + 160, boardY + board.size() * lineHeight + 10, bgPaint);
+
+        // 标题
+        Paint titlePaint = new Paint();
+        titlePaint.setColor(0xFFFFFFFF);
+        titlePaint.setTextSize(22f);
+        titlePaint.setTextAlign(Paint.Align.LEFT);
+        titlePaint.setAntiAlias(true);
+        canvas.drawText("排行榜", boardX, boardY - 10, titlePaint);
+
+        // 排名
+        Paint rankPaint = new Paint();
+        rankPaint.setTextSize(18f);
+        rankPaint.setTextAlign(Paint.Align.LEFT);
+        rankPaint.setAntiAlias(true);
+
+        for (int i = 0; i < board.size(); i++) {
+            GameEngine.RankEntry entry = board.get(i);
+            float y = boardY + i * lineHeight + 15;
+
+            if (entry.isPlayer) {
+                rankPaint.setColor(0xFF44FF44);  // 玩家绿色高亮
+            } else {
+                rankPaint.setColor(0xCCFFFFFF);
+            }
+
+            String text = (i + 1) + ". " + entry.name + " " + (int)entry.radius;
+            canvas.drawText(text, boardX, y, rankPaint);
+        }
     }
 }

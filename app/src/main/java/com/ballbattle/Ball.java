@@ -25,6 +25,14 @@ public class Ball {
     public float aiTargetY;
     public boolean isAI = false;
 
+    // 分身相关
+    public boolean isMainBall = true;      // 是否是主球
+    public int ballIndex = 0;               // 分身索引
+    public float mergeTimer = 0f;           // 合并计时器
+    public static final float MERGE_TIME = 16f;  // 16秒后合并
+    public float directionX = 0f;           // 当前移动方向X
+    public float directionY = 0f;           // 当前移动方向Y
+
     private static final float MIN_RADIUS = 15f;
     private static final float MAX_RADIUS = 200f;
 
@@ -76,9 +84,13 @@ public class Ball {
     public void setDirection(float dirX, float dirY) {
         float len = (float) Math.sqrt(dirX * dirX + dirY * dirY);
         if (len > 0.001f) {
-            vx = (dirX / len) * speed;
-            vy = (dirY / len) * speed;
+            directionX = dirX / len;
+            directionY = dirY / len;
+            vx = directionX * speed;
+            vy = directionY * speed;
         } else {
+            directionX = 0f;
+            directionY = 0f;
             vx = 0f;
             vy = 0f;
         }
@@ -103,6 +115,42 @@ public class Ball {
             radius = MAX_RADIUS;
         }
         // 球越大速度越慢
+        speed = Math.max(80f, 200f - (radius - 30f) * 0.5f);
+    }
+
+    /**
+     * 更新合并计时器
+     * @param deltaTime 帧间隔时间（秒）
+     */
+    public void updateMerge(float deltaTime) {
+        if (!isMainBall) {
+            mergeTimer += deltaTime;
+        }
+    }
+
+    /**
+     * 检查是否应该合并
+     * @return true 如果分身应该合并
+     */
+    public boolean shouldMerge() {
+        return !isMainBall && mergeTimer >= MERGE_TIME;
+    }
+
+    /**
+     * 与另一个球合并
+     * @param other 被合并的球
+     */
+    public void mergeWith(Ball other) {
+        if (other == null) return;
+        // 面积相加
+        float newArea = (float)(Math.PI * this.radius * this.radius + Math.PI * other.radius * other.radius);
+        this.radius = (float)Math.sqrt(newArea / Math.PI);
+        // 限制最大半径
+        if (this.radius > MAX_RADIUS) {
+            this.radius = MAX_RADIUS;
+        }
+        this.score += other.score;
+        // 更新速度
         speed = Math.max(80f, 200f - (radius - 30f) * 0.5f);
     }
 

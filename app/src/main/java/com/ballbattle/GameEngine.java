@@ -38,8 +38,20 @@ public class GameEngine {
 
     // 游戏对象
     public Ball player;
+    public final List<Ball> playerBalls = new ArrayList<>();  // 玩家所有球（包括分身）
     private final List<Ball> aiBalls = new ArrayList<>();
     private final List<Food> foods = new ArrayList<>();
+
+    // 分身相关常量
+    private static final int MAX_SPLIT_COUNT = 16;
+    private static final float SPLIT_COOLDOWN = 0.5f;
+    private float splitCooldownTimer = 0f;
+
+    // 吐球相关常量
+    private static final float SPIT_RADIUS = 5f;
+    private static final float SPIT_SPEED = 400f;
+    private float spitCooldownTimer = 0f;
+    private static final float SPIT_COOLDOWN = 0.1f;
 
     // 摄像机
     public float cameraX = 0f;
@@ -86,6 +98,7 @@ public class GameEngine {
     public void initGame() {
         aiBalls.clear();
         foods.clear();
+        playerBalls.clear();
         totalScore = 0;
         killCount = 0;
         maxRadius = 0f;
@@ -95,12 +108,17 @@ public class GameEngine {
         foodRespawnTimer = 0f;
         gameTime = 0f;
         viewScale = 1.0f;
+        splitCooldownTimer = 0f;
+        spitCooldownTimer = 0f;
 
         // 创建玩家 - 随机位置
         float px = 500 + random.nextFloat() * (WORLD_WIDTH - 1000);
         float py = 500 + random.nextFloat() * (WORLD_HEIGHT - 1000);
         player = new Ball(px, py, PLAYER_INITIAL_RADIUS, 0xFF44FF44, "我");
         player.isAI = false;
+        player.isMainBall = true;
+        player.ballIndex = 0;
+        playerBalls.add(player);
 
         // 创建AI球
         for (int i = 0; i < AI_COUNT; i++) {
@@ -155,14 +173,26 @@ public class GameEngine {
 
         gameTime += deltaTime;
 
+        // 更新冷却计时器
+        splitCooldownTimer = Math.max(0, splitCooldownTimer - deltaTime);
+        spitCooldownTimer = Math.max(0, spitCooldownTimer - deltaTime);
+
         // 更新视野缩放（根据玩家大小）
         updateViewScale();
 
-        // 更新玩家
-        player.update(deltaTime, WORLD_WIDTH, WORLD_HEIGHT);
+        // 更新所有玩家球（包括分身）
+        for (Ball b : playerBalls) {
+            if (b.alive) {
+                b.update(deltaTime, WORLD_WIDTH, WORLD_HEIGHT);
+                b.updateMerge(deltaTime);
+            }
+        }
 
         // 更新AI
         updateAI(deltaTime);
+
+        // 更新吐出球的位置
+        updateSpitBalls(deltaTime);
 
         // 碰撞检测
         checkPlayerEatFood();
@@ -172,8 +202,18 @@ public class GameEngine {
         }
         checkBallCollisions();
 
-        // 检查玩家是否被吃
-        if (!player.alive) {
+        // 检查分身合并
+        checkMerge();
+
+        // 检查玩家是否被吃（所有分身都死亡）
+        boolean anyAlive = false;
+        for (Ball b : playerBalls) {
+            if (b.alive) {
+                anyAlive = true;
+                break;
+            }
+        }
+        if (!anyAlive) {
             gameOver = true;
             gameRunning = false;
             if (callback != null) {
@@ -209,12 +249,21 @@ public class GameEngine {
         // 更新摄像机
         updateCamera();
 
-        // 更新总分
-        totalScore = player.score;
+        // 更新总分（所有分身分数之和）
+        totalScore = 0;
+        for (Ball b : playerBalls) {
+            if (b.alive) totalScore += b.score;
+        }
 
         // 追踪最大体积
-        if (player.radius > maxRadius) {
-            maxRadius = player.radius;
+        float currentMaxRadius = 0f;
+        for (Ball b : playerBalls) {
+            if (b.alive && b.radius > currentMaxRadius) {
+                currentMaxRadius = b.radius;
+            }
+        }
+        if (currentMaxRadius > maxRadius) {
+            maxRadius = currentMaxRadius;
         }
 
         // 5分钟倒计时结束
@@ -230,9 +279,16 @@ public class GameEngine {
 
     private void updateViewScale() {
         // 玩家越大，视野越广（缩放越小）
-        if (player != null && player.alive) {
+        // 计算所有玩家球的最大半径
+        float maxPlayerRadius = 0f;
+        for (Ball b : playerBalls) {
+            if (b.alive && b.radius > maxPlayerRadius) {
+                maxPlayerRadius = b.radius;
+            }
+        }
+        if (maxPlayerRadius > 0) {
             float baseRadius = 30f;
-            float scale = (float) Math.sqrt(baseRadius / player.radius);
+            float scale = (float) Math.sqrt(baseRadius / maxPlayerRadius);
             // 限制缩放范围
             viewScale = Math.max(0.5f, Math.min(1.0f, scale));
         }
@@ -246,11 +302,24 @@ public class GameEngine {
 
             boolean hasTarget = false;
 
-            // AI动态难度
-            if (player.alive) {
-                float dx = player.x - ai.x;
-                float dy = player.y - ai.y;
-                float distToPlayer = (float) Math.sqrt(dx * dx + dy * dy);
+            // AI动态难度 - 找最近的玩家球
+            Ball nearestPlayerBall = null;
+            float nearestPlayerDist = Float.MAX_VALUE;
+            for (Ball pb : playerBalls) {
+                if (!pb.alive) continue;
+                float dx = pb.x - ai.x;
+                float dy = pb.y - ai.y;
+                float dist = (float) Math.sqrt(dx * dx + dy * dy);
+                if (dist < nearestPlayerDist) {
+                    nearestPlayerDist = dist;
+                    nearestPlayerBall = pb;
+                }
+            }
+
+            if (nearestPlayerBall != null) {
+                float dx = nearestPlayerBall.x - ai.x;
+                float dy = nearestPlayerBall.y - ai.y;
+                float distToPlayer = nearestPlayerDist;
 
                 if (ai.radius < 30f) {
                     // 小AI：看到玩家就跑，逃跑速度+30%
@@ -271,7 +340,7 @@ public class GameEngine {
                 } else if (ai.radius > 40f) {
                     // 大AI：主动追玩家，追击速度+20%
                     float chaseRange = AI_FOOD_DETECT_RANGE * 1.5f;
-                    if (distToPlayer < chaseRange && ai.radius > player.radius + 5f) {
+                    if (distToPlayer < chaseRange && ai.radius > nearestPlayerBall.radius + 5f) {
                         if (distToPlayer > 0.001f) {
                             ai.setDirection(dx / distToPlayer, dy / distToPlayer);
                             // 追击速度+20%
@@ -328,13 +397,15 @@ public class GameEngine {
         Ball nearest = null;
         float nearestDist = AI_DANGER_DETECT_RANGE;
 
-        if (player.alive && player.radius > ai.radius + 5f) {
-            float dx = player.x - ai.x;
-            float dy = player.y - ai.y;
+        // 检查所有玩家球
+        for (Ball pb : playerBalls) {
+            if (!pb.alive || pb.radius <= ai.radius + 5f) continue;
+            float dx = pb.x - ai.x;
+            float dy = pb.y - ai.y;
             float dist = (float) Math.sqrt(dx * dx + dy * dy);
             if (dist < nearestDist) {
                 nearestDist = dist;
-                nearest = player;
+                nearest = pb;
             }
         }
 
@@ -373,23 +444,25 @@ public class GameEngine {
     }
 
     private void checkPlayerEatFood() {
-        if (!player.alive) return;
+        for (Ball playerBall : playerBalls) {
+            if (!playerBall.alive) continue;
 
-        for (Food food : foods) {
-            if (!food.alive) continue;
+            for (Food food : foods) {
+                if (!food.alive) continue;
 
-            float dx = player.x - food.x;
-            float dy = player.y - food.y;
-            float dist = (float) Math.sqrt(dx * dx + dy * dy);
+                float dx = playerBall.x - food.x;
+                float dy = playerBall.y - food.y;
+                float dist = (float) Math.sqrt(dx * dx + dy * dy);
 
-            if (dist < player.radius) {
-                food.alive = false;
-                player.grow(food.radius * food.radius);
-                player.score += (int) (food.radius * 2);
-                eatFoodCount++;
-                // 触发食物被吃事件
-                if (eventCallback != null) {
-                    eventCallback.onFoodEaten(food.x, food.y, food.color);
+                if (dist < playerBall.radius) {
+                    food.alive = false;
+                    playerBall.grow(food.radius * food.radius);
+                    playerBall.score += (int) (food.radius * 2);
+                    eatFoodCount++;
+                    // 触发食物被吃事件
+                    if (eventCallback != null) {
+                        eventCallback.onFoodEaten(food.x, food.y, food.color);
+                    }
                 }
             }
         }
@@ -412,27 +485,29 @@ public class GameEngine {
     }
 
     private void checkBallCollisions() {
-        // 玩家 vs AI
-        if (player.alive) {
+        // 玩家球（包括分身） vs AI
+        for (Ball playerBall : playerBalls) {
+            if (!playerBall.alive) continue;
+            
             for (Ball ai : aiBalls) {
                 if (!ai.alive) continue;
 
-                if (player.canEat(ai)) {
+                if (playerBall.canEat(ai)) {
                     ai.alive = false;
-                    player.grow(ai.radius * ai.radius * 0.8f);
-                    player.score += ai.score + 50;
+                    playerBall.grow(ai.radius * ai.radius * 0.8f);
+                    playerBall.score += ai.score + 50;
                     killCount++;
                     // 触发球被吃事件
                     if (eventCallback != null) {
                         eventCallback.onBallEaten(ai.x, ai.y, ai.color, ai.radius);
                     }
-                } else if (ai.canEat(player)) {
-                    player.alive = false;
-                    ai.grow(player.radius * player.radius * 0.8f);
-                    ai.score += player.score + 50;
+                } else if (ai.canEat(playerBall)) {
+                    playerBall.alive = false;
+                    ai.grow(playerBall.radius * playerBall.radius * 0.8f);
+                    ai.score += playerBall.score + 50;
                     // 触发球被吃事件
                     if (eventCallback != null) {
-                        eventCallback.onBallEaten(player.x, player.y, player.color, player.radius);
+                        eventCallback.onBallEaten(playerBall.x, playerBall.y, playerBall.color, playerBall.radius);
                     }
                 }
             }
@@ -461,15 +536,35 @@ public class GameEngine {
     }
 
     private void updateCamera() {
-        if (!player.alive) return;
-        cameraX = player.x;
-        cameraY = player.y;
+        // 计算所有玩家球的中心点
+        float totalX = 0f;
+        float totalY = 0f;
+        int count = 0;
+        for (Ball b : playerBalls) {
+            if (b.alive) {
+                totalX += b.x;
+                totalY += b.y;
+                count++;
+            }
+        }
+        if (count > 0) {
+            cameraX = totalX / count;
+            cameraY = totalY / count;
+        }
     }
 
     public List<Ball> getAliveAIBalls() {
         List<Ball> alive = new ArrayList<>();
         for (Ball ai : aiBalls) {
             if (ai.alive) alive.add(ai);
+        }
+        return alive;
+    }
+
+    public List<Ball> getAlivePlayerBalls() {
+        List<Ball> alive = new ArrayList<>();
+        for (Ball b : playerBalls) {
+            if (b.alive) alive.add(b);
         }
         return alive;
     }
@@ -483,13 +578,229 @@ public class GameEngine {
     }
 
     public void setPlayerDirection(float dirX, float dirY) {
-        if (!gameRunning || !player.alive) return;
-        player.setDirection(dirX, dirY);
+        if (!gameRunning) return;
+        // 所有分身都朝同一方向移动
+        for (Ball b : playerBalls) {
+            if (b.alive) {
+                b.setDirection(dirX, dirY);
+            }
+        }
     }
 
     public void stopPlayer() {
-        if (player != null) {
-            player.stop();
+        for (Ball b : playerBalls) {
+            if (b.alive) {
+                b.stop();
+            }
+        }
+    }
+
+    /**
+     * 检查是否可以分裂
+     */
+    public boolean canSplit() {
+        if (splitCooldownTimer > 0) return false;
+        if (playerBalls.size() >= MAX_SPLIT_COUNT) return false;
+        // 检查是否有足够大的球可以分裂
+        for (Ball b : playerBalls) {
+            if (b.alive && b.radius >= 30f) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 执行分裂
+     */
+    public void split() {
+        if (!canSplit()) return;
+
+        splitCooldownTimer = SPLIT_COOLDOWN;
+        List<Ball> newBalls = new ArrayList<>();
+
+        for (Ball b : playerBalls) {
+            if (!b.alive || b.radius < 30f) continue;
+            if (playerBalls.size() + newBalls.size() >= MAX_SPLIT_COUNT) break;
+
+            // 分裂
+            float newRadius = (float)(b.radius / Math.sqrt(2));
+            b.radius = newRadius;
+
+            Ball newBall = new Ball(b.x, b.y, newRadius, b.color, b.name);
+            newBall.isMainBall = false;
+            newBall.ballIndex = playerBalls.size() + newBalls.size();
+            newBall.mergeTimer = 0f;
+            newBall.isAI = false;
+            newBall.score = b.score / 2;
+            b.score = b.score / 2;
+
+            // 分裂方向：当前移动方向
+            float speed = 300f;
+            newBall.vx = b.directionX * speed;
+            newBall.vy = b.directionY * speed;
+            newBall.directionX = b.directionX;
+            newBall.directionY = b.directionY;
+
+            newBalls.add(newBall);
+        }
+
+        playerBalls.addAll(newBalls);
+    }
+
+    /**
+     * 检查是否可以吐球
+     */
+    public boolean canSpit() {
+        if (spitCooldownTimer > 0) return false;
+        // 检查主球是否有足够体积
+        if (player != null && player.alive && player.radius > SPIT_RADIUS * 2) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 执行吐球
+     */
+    public void spit() {
+        if (!canSpit()) return;
+
+        spitCooldownTimer = SPIT_COOLDOWN;
+
+        // 主球吐球
+        if (player != null && player.alive && player.radius > SPIT_RADIUS * 2) {
+            // 减少体积
+            float oldArea = (float)(Math.PI * player.radius * player.radius);
+            float spitArea = (float)(Math.PI * SPIT_RADIUS * SPIT_RADIUS);
+            float newArea = oldArea - spitArea;
+            if (newArea > 0) {
+                player.radius = (float)Math.sqrt(newArea / Math.PI);
+
+                // 创建吐出的球（作为特殊食物）
+                float spitX = player.x + player.directionX * (player.radius + SPIT_RADIUS + 5);
+                float spitY = player.y + player.directionY * (player.radius + SPIT_RADIUS + 5);
+
+                Food spitFood = new Food(spitX, spitY);
+                spitFood.radius = SPIT_RADIUS;
+                spitFood.color = player.color;
+                spitFood.isSpitBall = true;
+                spitFood.vx = player.directionX * SPIT_SPEED;
+                spitFood.vy = player.directionY * SPIT_SPEED;
+                spitFood.spitLifeTime = 2f;  // 2秒后变成普通食物
+
+                foods.add(spitFood);
+            }
+        }
+    }
+
+    /**
+     * 更新吐出球的位置
+     */
+    private void updateSpitBalls(float deltaTime) {
+        for (Food f : foods) {
+            if (f.isSpitBall && f.spitLifeTime > 0) {
+                f.x += f.vx * deltaTime;
+                f.y += f.vy * deltaTime;
+                f.vx *= 0.95f;  // 减速
+                f.vy *= 0.95f;
+                f.spitLifeTime -= deltaTime;
+                if (f.spitLifeTime <= 0) {
+                    f.isSpitBall = false;
+                    f.vx = 0;
+                    f.vy = 0;
+                }
+            }
+        }
+    }
+
+    /**
+     * 检查分身合并
+     */
+    private void checkMerge() {
+        for (int i = playerBalls.size() - 1; i >= 0; i--) {
+            Ball b = playerBalls.get(i);
+            if (b.shouldMerge() && !b.isMainBall) {
+                // 找到最近的主球或其他分身合并
+                Ball target = findNearestPlayerBall(b);
+                if (target != null) {
+                    target.mergeWith(b);
+                    b.alive = false;
+                    playerBalls.remove(i);
+                }
+            }
+        }
+    }
+
+    /**
+     * 找到最近的玩家球
+     */
+    private Ball findNearestPlayerBall(Ball source) {
+        Ball nearest = null;
+        float minDist = Float.MAX_VALUE;
+        for (Ball b : playerBalls) {
+            if (b == source || !b.alive) continue;
+            float dx = b.x - source.x;
+            float dy = b.y - source.y;
+            float dist = (float)Math.sqrt(dx*dx + dy*dy);
+            if (dist < minDist) {
+                minDist = dist;
+                nearest = b;
+            }
+        }
+        return nearest;
+    }
+
+    /**
+     * 获取排行榜数据
+     */
+    public List<RankEntry> getLeaderboard() {
+        List<RankEntry> entries = new ArrayList<>();
+
+        // 添加玩家（所有分身半径之和）
+        float playerTotalRadius = 0;
+        for (Ball b : playerBalls) {
+            if (b.alive) playerTotalRadius += b.radius;
+        }
+        if (playerTotalRadius > 0) {
+            entries.add(new RankEntry("我", playerTotalRadius, true));
+        }
+
+        // 添加AI
+        for (Ball ai : aiBalls) {
+            if (ai.alive) {
+                entries.add(new RankEntry(ai.name, ai.radius, false));
+            }
+        }
+
+        // 按半径排序
+        entries.sort((a, b) -> Float.compare(b.radius, a.radius));
+
+        // 只返回前10
+        return entries.subList(0, Math.min(10, entries.size()));
+    }
+
+    /**
+     * 获取玩家排名
+     */
+    public int getPlayerRank() {
+        List<RankEntry> board = getLeaderboard();
+        for (int i = 0; i < board.size(); i++) {
+            if (board.get(i).isPlayer) return i + 1;
+        }
+        return -1;
+    }
+
+    /**
+     * 排行榜条目类
+     */
+    public static class RankEntry {
+        public String name;
+        public float radius;
+        public boolean isPlayer;
+
+        public RankEntry(String name, float radius, boolean isPlayer) {
+            this.name = name;
+            this.radius = radius;
+            this.isPlayer = isPlayer;
         }
     }
 
