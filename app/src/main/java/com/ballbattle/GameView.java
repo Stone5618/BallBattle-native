@@ -22,10 +22,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
     private static final int GRID_SIZE = 100;
     private static final int BORDER_WIDTH = 4;
 
-    // 虚拟摇杆参数
-    private static final float JOYSTICK_RADIUS = 80f;
-    private static final float JOYSTICK_CENTER_RADIUS = 30f;
-    private static final float JOYSTICK_MARGIN = 100f;
+    // 虚拟摇杆参数 - 优化后更大更美观
+    private static final float JOYSTICK_RADIUS = 100f;
+    private static final float JOYSTICK_CENTER_RADIUS = 42f;
+    private static final float JOYSTICK_MARGIN = 80f;
+    private static final float JOYSTICK_STROKE_WIDTH = 4f;
 
     // 按钮参数
     private static final float BUTTON_SIZE = 70f;
@@ -140,14 +141,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
 
         ballPaint.setAntiAlias(true);
 
-        // 摇杆画笔 - P4-1优化：外圈更透明，内圈更明显
-        joystickBgPaint.setColor(0x25000000);
+        // 摇杆画笔 - 优化后更美观
+        joystickBgPaint.setColor(0x40000000);
         joystickBgPaint.setStyle(Paint.Style.FILL);
         joystickBgPaint.setAntiAlias(true);
 
-        joystickStickPaint.setColor(0xB0FFFFFF);
+        joystickStickPaint.setColor(0xFFFFFFFF);
         joystickStickPaint.setStyle(Paint.Style.FILL);
         joystickStickPaint.setAntiAlias(true);
+        joystickStickPaint.setShadowLayer(8f, 0f, 2f, 0x40000000);
 
         // 按钮画笔
         buttonPaint.setStyle(Paint.Style.FILL);
@@ -879,11 +881,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
     }
 
     /**
-     * 绘制虚拟摇杆 - P4-1优化：外圈更透明，内圈更明显
+     * 绘制虚拟摇杆 - 优化后：更大、更美观、有方向指示和按下效果
      */
     private void drawJoystick(Canvas canvas) {
         float centerX, centerY;
-        
+
         if (joystickActive) {
             centerX = joystickCenterX;
             centerY = joystickCenterY;
@@ -892,13 +894,56 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
             centerY = screenHeight - JOYSTICK_MARGIN - JOYSTICK_RADIUS;
         }
 
-        // 绘制背景圆（更透明）
+        // 绘制外圈背景（半透明黑）
         canvas.drawCircle(centerX, centerY, JOYSTICK_RADIUS, joystickBgPaint);
 
-        // 绘制把手（更明显）
+        // 绘制外圈描边（白色半透明）
+        Paint strokePaint = new Paint();
+        strokePaint.setColor(joystickActive ? 0x80FFFFFF : 0x50FFFFFF);
+        strokePaint.setStyle(Paint.Style.STROKE);
+        strokePaint.setStrokeWidth(JOYSTICK_STROKE_WIDTH);
+        strokePaint.setAntiAlias(true);
+        canvas.drawCircle(centerX, centerY, JOYSTICK_RADIUS, strokePaint);
+
+        // 绘制内圈装饰线（虚线圆）
+        Paint dashPaint = new Paint();
+        dashPaint.setColor(0x30FFFFFF);
+        dashPaint.setStyle(Paint.Style.STROKE);
+        dashPaint.setStrokeWidth(2f);
+        dashPaint.setAntiAlias(true);
+        canvas.drawCircle(centerX, centerY, JOYSTICK_RADIUS * 0.6f, dashPaint);
+
+        // 计算把手位置
         float stickX = joystickActive ? joystickStickX : centerX;
         float stickY = joystickActive ? joystickStickY : centerY;
+
+        // 绘制方向指示线（从中心到把手）
+        if (joystickActive) {
+            Paint linePaint = new Paint();
+            linePaint.setColor(0x40FFFFFF);
+            linePaint.setStrokeWidth(3f);
+            linePaint.setAntiAlias(true);
+            canvas.drawLine(centerX, centerY, stickX, stickY, linePaint);
+        }
+
+        // 绘制把手外圈（灰色边框）
+        Paint stickBorderPaint = new Paint();
+        stickBorderPaint.setColor(0xFF888888);
+        stickBorderPaint.setStyle(Paint.Style.FILL);
+        stickBorderPaint.setAntiAlias(true);
+        canvas.drawCircle(stickX, stickY, JOYSTICK_CENTER_RADIUS + 3f, stickBorderPaint);
+
+        // 绘制把手主体（白色带渐变效果）
         canvas.drawCircle(stickX, stickY, JOYSTICK_CENTER_RADIUS, joystickStickPaint);
+
+        // 绘制把手高光（左上角小圆）
+        Paint highlightPaint = new Paint();
+        highlightPaint.setColor(0x60FFFFFF);
+        highlightPaint.setStyle(Paint.Style.FILL);
+        highlightPaint.setAntiAlias(true);
+        canvas.drawCircle(stickX - JOYSTICK_CENTER_RADIUS * 0.3f,
+                stickY - JOYSTICK_CENTER_RADIUS * 0.3f,
+                JOYSTICK_CENTER_RADIUS * 0.25f, highlightPaint);
     }
 
     /**
