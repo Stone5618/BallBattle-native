@@ -50,6 +50,16 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         init();
     }
 
+    public GameView(Context context, android.util.AttributeSet attrs) {
+        super(context, attrs);
+        init();
+    }
+
+    public GameView(Context context, android.util.AttributeSet attrs, int defStyleAttr) {
+        super(context, attrs, defStyleAttr);
+        init();
+    }
+
     private void init() {
         holder = getHolder();
         holder.addCallback(this);
