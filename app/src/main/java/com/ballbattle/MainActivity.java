@@ -27,10 +27,14 @@ public class MainActivity extends Activity {
     private Button btnCheckIn;
     private Button btnRank;
     private TextView tvCoins;
+    private TextView tvRankInfo;
 
     private SkinSystem skinSystem;
     private CheckInSystem checkInSystem;
     private RankSystem rankSystem;
+
+    // P4-4: 音效管理器
+    private SoundManager soundManager;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -47,10 +51,16 @@ public class MainActivity extends Activity {
 
         setContentView(R.layout.activity_main);
 
+        // P4-3: Activity 转场淡入淡出
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
+
         // 初始化系统
         skinSystem = new SkinSystem(this);
         checkInSystem = new CheckInSystem(this);
         rankSystem = new RankSystem(this);
+
+        // P4-4: 初始化音效管理器
+        soundManager = new SoundManager(this);
 
         gameView = findViewById(R.id.game_view);
         btnModeContainer = findViewById(R.id.btn_mode_container);
@@ -61,6 +71,7 @@ public class MainActivity extends Activity {
         btnCheckIn = findViewById(R.id.btn_checkin);
         btnRank = findViewById(R.id.btn_rank);
         tvCoins = findViewById(R.id.tv_coins);
+        tvRankInfo = findViewById(R.id.tv_rank_info);
 
         // 将皮肤系统传递给引擎
         gameView.getEngine().setSkinSystem(skinSystem);
@@ -68,8 +79,16 @@ public class MainActivity extends Activity {
         // 将段位系统传递给GameView
         gameView.setRankSystem(rankSystem);
 
+        // P4-4: 设置音效回调
+        gameView.getEngine().soundCallback = soundId -> {
+            if (soundManager != null) {
+                soundManager.play(soundId);
+            }
+        };
+
         // 更新金币显示
         updateCoinsDisplay();
+        updateRankInfoDisplay();
 
         // 设置游戏结束监听
         gameView.setOnGameOverListener(new GameView.OnGameOverListener() {
@@ -83,6 +102,10 @@ public class MainActivity extends Activity {
         btnFree.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                // P4-4: 按钮音效
+                if (soundManager != null) soundManager.play(SoundManager.SOUND_BUTTON);
+                // P4-2: 按钮点击动画
+                animateButton(v);
                 gameView.getEngine().currentMode = GameEngine.GameMode.FREE;
                 gameView.getEngine().setSkinSystem(skinSystem);
                 gameView.startGame();
@@ -94,6 +117,8 @@ public class MainActivity extends Activity {
         btnSurvival.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (soundManager != null) soundManager.play(SoundManager.SOUND_BUTTON);
+                animateButton(v);
                 gameView.getEngine().currentMode = GameEngine.GameMode.SURVIVAL;
                 gameView.getEngine().setSkinSystem(skinSystem);
                 gameView.startGame();
@@ -105,6 +130,8 @@ public class MainActivity extends Activity {
         btnBattle.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (soundManager != null) soundManager.play(SoundManager.SOUND_BUTTON);
+                animateButton(v);
                 gameView.getEngine().currentMode = GameEngine.GameMode.BATTLE_ROYALE;
                 gameView.getEngine().setSkinSystem(skinSystem);
                 gameView.startGame();
@@ -116,6 +143,8 @@ public class MainActivity extends Activity {
         btnSkin.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (soundManager != null) soundManager.play(SoundManager.SOUND_BUTTON);
+                animateButton(v);
                 showSkinDialog();
             }
         });
@@ -124,6 +153,8 @@ public class MainActivity extends Activity {
         btnCheckIn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (soundManager != null) soundManager.play(SoundManager.SOUND_BUTTON);
+                animateButton(v);
                 handleCheckIn();
             }
         });
@@ -132,6 +163,8 @@ public class MainActivity extends Activity {
         btnRank.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (soundManager != null) soundManager.play(SoundManager.SOUND_BUTTON);
+                animateButton(v);
                 new AlertDialog.Builder(MainActivity.this)
                         .setTitle("段位系统")
                         .setMessage(
@@ -147,17 +180,70 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * 隐藏模式选择按钮
+     * P4-2: 通用按钮点击动画
      */
-    private void hideButtons() {
-        btnModeContainer.setVisibility(View.GONE);
+    private void animateButton(View button) {
+        button.animate()
+                .scaleX(0.9f)
+                .scaleY(0.9f)
+                .setDuration(100)
+                .withEndAction(() -> {
+                    button.animate()
+                            .scaleX(1f)
+                            .scaleY(1f)
+                            .setDuration(100)
+                            .start();
+                })
+                .start();
     }
 
     /**
-     * 显示模式选择按钮
+     * P4-3: 隐藏模式选择按钮（带动画）
+     */
+    private void hideButtons() {
+        View[] buttons = {btnFree, btnSurvival, btnBattle, btnSkin, btnCheckIn, btnRank, tvCoins};
+        for (View btn : buttons) {
+            if (btn != null) {
+                btn.animate()
+                        .alpha(0f)
+                        .scaleX(0.8f)
+                        .scaleY(0.8f)
+                        .setDuration(300)
+                        .start();
+            }
+        }
+        // 段位信息也隐藏
+        if (tvRankInfo != null) {
+            tvRankInfo.animate()
+                    .alpha(0f)
+                    .scaleX(0.8f)
+                    .scaleY(0.8f)
+                    .setDuration(300)
+                    .start();
+        }
+        // 延迟隐藏整个容器
+        btnModeContainer.postDelayed(() -> {
+            btnModeContainer.setVisibility(View.GONE);
+        }, 350);
+    }
+
+    /**
+     * P4-3: 显示模式选择按钮（带动画）
      */
     private void showButtons() {
         btnModeContainer.setVisibility(View.VISIBLE);
+        View[] buttons = {btnFree, btnSurvival, btnBattle, btnSkin, btnCheckIn, btnRank, tvCoins, tvRankInfo};
+        for (int i = 0; i < buttons.length; i++) {
+            if (buttons[i] != null) {
+                buttons[i].animate()
+                        .alpha(1f)
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .setDuration(300)
+                        .setStartDelay(i * 50)  // 依次出现
+                        .start();
+            }
+        }
     }
 
     /**
@@ -180,6 +266,15 @@ public class MainActivity extends Activity {
     private void updateCoinsDisplay() {
         if (tvCoins != null) {
             tvCoins.setText("金币: " + skinSystem.getCoins());
+        }
+    }
+
+    /**
+     * 更新段位信息显示
+     */
+    private void updateRankInfoDisplay() {
+        if (tvRankInfo != null && rankSystem != null) {
+            tvRankInfo.setText("段位: " + rankSystem.getRankName() + "  " + rankSystem.getStars() + "/" + rankSystem.getMaxStars() + "\u2605");
         }
     }
 
@@ -430,6 +525,7 @@ public class MainActivity extends Activity {
                             public void onClick(DialogInterface dialog, int which) {
                                 showButtons();
                                 updateCoinsDisplay();
+                                updateRankInfoDisplay();
                             }
                         })
                         .setCancelable(false)
@@ -443,10 +539,23 @@ public class MainActivity extends Activity {
         super.onResume();
         hideSystemUI();
         updateCoinsDisplay();
+        updateRankInfoDisplay();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        // P4-4: 释放音效资源
+        if (soundManager != null) {
+            soundManager.release();
+            soundManager = null;
+        }
+    }
+
+    // P4-3: 返回菜单时淡入淡出转场
+    @Override
+    public void finish() {
+        super.finish();
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
     }
 }

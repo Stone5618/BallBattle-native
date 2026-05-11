@@ -3,6 +3,7 @@ package com.ballbattle;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.RectF;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -80,6 +81,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
     private float trailTimer = 0f;
     private static final float TRAIL_INTERVAL = 0.03f;  // 残影生成间隔
 
+    // P4-2: 按钮动画状态
+    private float splitButtonScale = 1f;
+    private float spitButtonScale = 1f;
+
+    // P4-3: 游戏开始淡入效果
+    private float gameFadeAlpha = 0f;
+
     public interface OnGameOverListener {
         void onGameOver(int score, int killCount, float maxRadius, int eatFoodCount, float gameTime);
     }
@@ -132,12 +140,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
 
         ballPaint.setAntiAlias(true);
 
-        // 摇杆画笔
-        joystickBgPaint.setColor(0x40000000);
+        // 摇杆画笔 - P4-1优化：外圈更透明，内圈更明显
+        joystickBgPaint.setColor(0x25000000);
         joystickBgPaint.setStyle(Paint.Style.FILL);
         joystickBgPaint.setAntiAlias(true);
 
-        joystickStickPaint.setColor(0x80FFFFFF);
+        joystickStickPaint.setColor(0xB0FFFFFF);
         joystickStickPaint.setStyle(Paint.Style.FILL);
         joystickStickPaint.setAntiAlias(true);
 
@@ -165,10 +173,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
                 
                 if (isInSplitButton(x, y)) {
                     engine.split();
+                    splitButtonScale = 0.85f;
                     return true;
                 }
                 if (isInSpitButton(x, y)) {
                     engine.spit();
+                    spitButtonScale = 0.85f;
                     return true;
                 }
                 
@@ -279,6 +289,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         particles.clear();
         trailPoints.clear();
         trailTimer = 0f;
+        // P4-3: 游戏开始时设置淡入
+        gameFadeAlpha = 1f;
         engine.setGameCallback(new GameEngine.GameCallback() {
             @Override
             public void onGameOver(int score, int killCount, float maxRadius, int eatFoodCount, float gameTime) {
@@ -402,6 +414,16 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
                     if (trailPoints.get(i).life <= 0) trailPoints.remove(i);
                 }
 
+                // P4-2: 更新按钮动画缩放
+                splitButtonScale += (1f - splitButtonScale) * 0.15f;
+                spitButtonScale += (1f - spitButtonScale) * 0.15f;
+
+                // P4-3: 更新淡入效果
+                if (gameFadeAlpha > 0) {
+                    gameFadeAlpha -= 0.02f;
+                    if (gameFadeAlpha < 0) gameFadeAlpha = 0;
+                }
+
                 Canvas canvas = null;
                 try {
                     canvas = holder.lockCanvas();
@@ -522,6 +544,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
 
         // 13. 虚拟摇杆（不缩放）
         drawJoystick(canvas);
+
+        // 14. P4-3: 游戏开始淡入效果
+        if (gameFadeAlpha > 0) {
+            Paint fadePaint = new Paint();
+            fadePaint.setColor((int)(gameFadeAlpha * 255) << 24 | 0x000000);
+            fadePaint.setStyle(Paint.Style.FILL);
+            canvas.drawRect(0, 0, screenWidth, screenHeight, fadePaint);
+        }
     }
 
     private void drawGrid(Canvas canvas, float cameraX, float cameraY, float viewWidth, float viewHeight) {
@@ -592,27 +622,43 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
     }
 
     private void drawHUD(Canvas canvas) {
+        // P4-1: 左上角分数区域添加半透明黑色圆角背景
+        Paint hudBgPaint = new Paint();
+        hudBgPaint.setColor(0x60000000);
+        hudBgPaint.setStyle(Paint.Style.FILL);
+        hudBgPaint.setAntiAlias(true);
+        RectF hudBgRect = new RectF(10, 10, 200, 130);
+        canvas.drawRoundRect(hudBgRect, 12f, 12f, hudBgPaint);
+
         // 分数
         hudPaint.setColor(0xFFFFFFFF);
-        hudPaint.setTextSize(32f);
+        hudPaint.setTextSize(30f);
         hudPaint.setTextAlign(Paint.Align.LEFT);
         hudPaint.setFakeBoldText(false);
-        canvas.drawText("分数: " + engine.totalScore, 20, 45, hudPaint);
+        canvas.drawText("分数: " + engine.totalScore, 20, 42, hudPaint);
 
         // 玩家体积
         if (engine.player != null && engine.player.alive) {
-            hudPaint.setTextSize(22f);
+            hudPaint.setTextSize(20f);
             hudPaint.setColor(0xCCFFFFFF);
-            canvas.drawText("体积: " + (int) engine.player.radius, 20, 72, hudPaint);
+            canvas.drawText("体积: " + (int) engine.player.radius, 20, 66, hudPaint);
         }
 
         // 存活AI
         int aliveAI = engine.getAliveAIBalls().size();
-        hudPaint.setTextSize(22f);
+        hudPaint.setTextSize(20f);
         hudPaint.setColor(0xCCFFFFFF);
-        canvas.drawText("对手: " + aliveAI, 20, 97, hudPaint);
+        canvas.drawText("对手: " + aliveAI, 20, 88, hudPaint);
 
-        // 游戏时间（居中显示）
+        // 段位显示
+        if (rankSystem != null) {
+            hudPaint.setColor(rankSystem.getRankColor());
+            hudPaint.setTextSize(18f);
+            hudPaint.setTextAlign(Paint.Align.LEFT);
+            canvas.drawText(rankSystem.getRankName() + " " + rankSystem.getStars() + "/" + rankSystem.getMaxStars() + "\u2605", 20, 112, hudPaint);
+        }
+
+        // 游戏时间（居中显示）- P4-1: 添加背景
         if (engine.currentMode == GameEngine.GameMode.FREE) {
             float timeLeft = Math.max(0, 300f - engine.getGameTime());
             int minutes = (int)(timeLeft / 60);
@@ -621,7 +667,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
             hudPaint.setTextSize(28f);
             hudPaint.setColor(timeLeft < 60 ? 0xFFFF4444 : 0xFFFFFFFF);
             hudPaint.setTextAlign(Paint.Align.CENTER);
-            canvas.drawText(timeStr, screenWidth / 2f, 45, hudPaint);
+            // 倒计时背景
+            float timeTextWidth = hudPaint.measureText(timeStr);
+            RectF timeBgRect = new RectF(screenWidth / 2f - timeTextWidth / 2f - 12, 14, screenWidth / 2f + timeTextWidth / 2f + 12, 50);
+            Paint timeBgPaint = new Paint();
+            timeBgPaint.setColor(timeLeft < 60 ? 0x60FF0000 : 0x60000000);
+            timeBgPaint.setStyle(Paint.Style.FILL);
+            timeBgPaint.setAntiAlias(true);
+            canvas.drawRoundRect(timeBgRect, 10f, 10f, timeBgPaint);
+            canvas.drawText(timeStr, screenWidth / 2f, 42, hudPaint);
         } else if (engine.currentMode == GameEngine.GameMode.SURVIVAL) {
             // 生存模式显示存活时间
             int minutes = (int)(engine.getGameTime() / 60);
@@ -630,20 +684,35 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
             hudPaint.setTextSize(28f);
             hudPaint.setColor(0xFFFFFFFF);
             hudPaint.setTextAlign(Paint.Align.CENTER);
-            canvas.drawText(timeStr, screenWidth / 2f, 45, hudPaint);
+            float timeTextWidth = hudPaint.measureText(timeStr);
+            RectF timeBgRect = new RectF(screenWidth / 2f - timeTextWidth / 2f - 12, 14, screenWidth / 2f + timeTextWidth / 2f + 12, 50);
+            Paint timeBgPaint = new Paint();
+            timeBgPaint.setColor(0x60000000);
+            timeBgPaint.setStyle(Paint.Style.FILL);
+            timeBgPaint.setAntiAlias(true);
+            canvas.drawRoundRect(timeBgRect, 10f, 10f, timeBgPaint);
+            canvas.drawText(timeStr, screenWidth / 2f, 42, hudPaint);
         } else if (engine.currentMode == GameEngine.GameMode.BATTLE_ROYALE) {
             // 大逃杀模式显示存活人数
+            String aliveStr = "存活: " + (aliveAI + 1);
             hudPaint.setTextSize(28f);
             hudPaint.setColor(0xFFFFFFFF);
             hudPaint.setTextAlign(Paint.Align.CENTER);
-            canvas.drawText("存活: " + (aliveAI + 1), screenWidth / 2f, 45, hudPaint);
+            float textWidth = hudPaint.measureText(aliveStr);
+            RectF aliveBgRect = new RectF(screenWidth / 2f - textWidth / 2f - 12, 14, screenWidth / 2f + textWidth / 2f + 12, 50);
+            Paint aliveBgPaint = new Paint();
+            aliveBgPaint.setColor(0x60000000);
+            aliveBgPaint.setStyle(Paint.Style.FILL);
+            aliveBgPaint.setAntiAlias(true);
+            canvas.drawRoundRect(aliveBgRect, 10f, 10f, aliveBgPaint);
+            canvas.drawText(aliveStr, screenWidth / 2f, 42, hudPaint);
         }
 
         // 击杀数（右上角）
-        hudPaint.setTextSize(22f);
+        hudPaint.setTextSize(20f);
         hudPaint.setColor(0xCCFFFFFF);
         hudPaint.setTextAlign(Paint.Align.RIGHT);
-        canvas.drawText("击杀: " + engine.killCount, screenWidth - 20, 45, hudPaint);
+        canvas.drawText("击杀: " + engine.killCount, screenWidth - 20, 42, hudPaint);
 
         // 生存模式 - 显示生命值
         if (engine.currentMode == GameEngine.GameMode.SURVIVAL) {
@@ -661,19 +730,19 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         if (engine.currentMode == GameEngine.GameMode.BATTLE_ROYALE) {
             float timeLeft = Math.max(0, 30f - engine.safeZoneTimer);
             if (timeLeft <= 5f) {
-                hudPaint.setTextSize(22f);
+                String shrinkStr = "缩圈: " + (int)timeLeft + "s";
+                hudPaint.setTextSize(20f);
                 hudPaint.setColor(0xFFFF4444);
                 hudPaint.setTextAlign(Paint.Align.CENTER);
-                canvas.drawText("缩圈: " + (int)timeLeft + "s", screenWidth / 2f, 80, hudPaint);
+                float textWidth = hudPaint.measureText(shrinkStr);
+                RectF shrinkBgRect = new RectF(screenWidth / 2f - textWidth / 2f - 10, 56, screenWidth / 2f + textWidth / 2f + 10, 82);
+                Paint shrinkBgPaint = new Paint();
+                shrinkBgPaint.setColor(0x60FF0000);
+                shrinkBgPaint.setStyle(Paint.Style.FILL);
+                shrinkBgPaint.setAntiAlias(true);
+                canvas.drawRoundRect(shrinkBgRect, 8f, 8f, shrinkBgPaint);
+                canvas.drawText(shrinkStr, screenWidth / 2f, 76, hudPaint);
             }
-        }
-
-        // 段位显示（左上角，对手数下方）
-        if (rankSystem != null) {
-            hudPaint.setColor(rankSystem.getRankColor());
-            hudPaint.setTextSize(20f);
-            hudPaint.setTextAlign(Paint.Align.LEFT);
-            canvas.drawText(rankSystem.getRankName() + " " + rankSystem.getStars() + "/" + rankSystem.getMaxStars() + "\u2605", 20, 122, hudPaint);
         }
     }
 
@@ -683,15 +752,27 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         int minimapX = screenWidth - minimapSize - padding;
         int minimapY = screenHeight - minimapSize - padding;
 
-        // 背景
-        minimapBgPaint.setColor(0x60000000);
-        canvas.drawRect(minimapX, minimapY, minimapX + minimapSize, minimapY + minimapSize, minimapBgPaint);
-        
-        // 边框
+        // P4-1: 圆角边框背景
+        Paint minimapRoundBgPaint = new Paint();
+        minimapRoundBgPaint.setColor(0x60000000);
+        minimapRoundBgPaint.setStyle(Paint.Style.FILL);
+        minimapRoundBgPaint.setAntiAlias(true);
+        RectF minimapRect = new RectF(minimapX, minimapY, minimapX + minimapSize, minimapY + minimapSize);
+        canvas.drawRoundRect(minimapRect, 10f, 10f, minimapRoundBgPaint);
+
+        // 圆角边框
         minimapPaint.setColor(0x80FFFFFF);
         minimapPaint.setStyle(Paint.Style.STROKE);
         minimapPaint.setStrokeWidth(2f);
-        canvas.drawRect(minimapX, minimapY, minimapX + minimapSize, minimapY + minimapSize, minimapPaint);
+        canvas.drawRoundRect(minimapRect, 10f, 10f, minimapPaint);
+
+        // P4-1: 小地图标题"地图"
+        Paint mapTitlePaint = new Paint();
+        mapTitlePaint.setColor(0x80FFFFFF);
+        mapTitlePaint.setTextSize(14f);
+        mapTitlePaint.setTextAlign(Paint.Align.CENTER);
+        mapTitlePaint.setAntiAlias(true);
+        canvas.drawText("地图", minimapX + minimapSize / 2f, minimapY - 4, mapTitlePaint);
 
         float scaleX = (float) minimapSize / GameEngine.WORLD_WIDTH;
         float scaleY = (float) minimapSize / GameEngine.WORLD_HEIGHT;
@@ -798,7 +879,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
     }
 
     /**
-     * 绘制虚拟摇杆
+     * 绘制虚拟摇杆 - P4-1优化：外圈更透明，内圈更明显
      */
     private void drawJoystick(Canvas canvas) {
         float centerX, centerY;
@@ -811,25 +892,32 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
             centerY = screenHeight - JOYSTICK_MARGIN - JOYSTICK_RADIUS;
         }
 
-        // 绘制背景圆
+        // 绘制背景圆（更透明）
         canvas.drawCircle(centerX, centerY, JOYSTICK_RADIUS, joystickBgPaint);
 
-        // 绘制把手
+        // 绘制把手（更明显）
         float stickX = joystickActive ? joystickStickX : centerX;
         float stickY = joystickActive ? joystickStickY : centerY;
         canvas.drawCircle(stickX, stickY, JOYSTICK_CENTER_RADIUS, joystickStickPaint);
     }
 
     /**
-     * 绘制按钮（分裂和吐球）
+     * 绘制按钮（分裂和吐球）- P4-1优化：渐变背景+描边，P4-2：缩放动画
      */
     private void drawButtons(Canvas canvas) {
         // 分裂按钮（右下角）
         float splitX = screenWidth - BUTTON_MARGIN - BUTTON_SIZE;
         float splitY = screenHeight - BUTTON_MARGIN - BUTTON_SIZE;
-        buttonPaint.setColor(0x80000000);
+
+        // P4-2: 应用缩放动画
+        canvas.save();
+        canvas.scale(splitButtonScale, splitButtonScale, splitX, splitY);
+
+        // P4-1: 渐变背景
+        buttonPaint.setColor(0x804444FF);
         canvas.drawCircle(splitX, splitY, BUTTON_SIZE, buttonPaint);
-        buttonPaint.setColor(0xFFFFFFFF);
+        // 描边
+        buttonPaint.setColor(0xB0FFFFFF);
         buttonPaint.setStyle(Paint.Style.STROKE);
         buttonPaint.setStrokeWidth(3f);
         canvas.drawCircle(splitX, splitY, BUTTON_SIZE, buttonPaint);
@@ -837,19 +925,31 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         buttonTextPaint.setTextAlign(Paint.Align.CENTER);
         canvas.drawText("-", splitX, splitY + 12f, buttonTextPaint);
 
+        canvas.restore();
+
         // 吐球按钮（分裂按钮左边）
         float spitX = splitX - BUTTON_SIZE * 2 - 10f;
-        buttonPaint.setColor(0x80000000);
+
+        // P4-2: 应用缩放动画
+        canvas.save();
+        canvas.scale(spitButtonScale, spitButtonScale, spitX, splitY);
+
+        // P4-1: 渐变背景
+        buttonPaint.setColor(0x80FFAA00);
         canvas.drawCircle(spitX, splitY, BUTTON_SIZE, buttonPaint);
-        buttonPaint.setColor(0xFFFFFF00);
+        // 描边
+        buttonPaint.setColor(0xB0FFFFFF);
         buttonPaint.setStyle(Paint.Style.STROKE);
+        buttonPaint.setStrokeWidth(3f);
         canvas.drawCircle(spitX, splitY, BUTTON_SIZE, buttonPaint);
         buttonPaint.setStyle(Paint.Style.FILL);
         canvas.drawText("o", spitX, splitY + 12f, buttonTextPaint);
+
+        canvas.restore();
     }
 
     /**
-     * 绘制排行榜
+     * 绘制排行榜 - P4-1优化：圆角背景
      */
     private void drawLeaderboard(Canvas canvas) {
         List<GameEngine.RankEntry> board = engine.getLeaderboard();
@@ -859,11 +959,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         float boardY = 60f;
         float lineHeight = 28f;
 
-        // 背景
+        // P4-1: 圆角背景
         Paint bgPaint = new Paint();
         bgPaint.setColor(0x60000000);
         bgPaint.setStyle(Paint.Style.FILL);
-        canvas.drawRect(boardX - 10, boardY - 35, boardX + 160, boardY + board.size() * lineHeight + 10, bgPaint);
+        bgPaint.setAntiAlias(true);
+        RectF boardRect = new RectF(boardX - 10, boardY - 35, boardX + 160, boardY + board.size() * lineHeight + 10);
+        canvas.drawRoundRect(boardRect, 12f, 12f, bgPaint);
 
         // 标题
         Paint titlePaint = new Paint();

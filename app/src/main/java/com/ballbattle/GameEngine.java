@@ -118,6 +118,12 @@ public class GameEngine {
     }
     public GameEventCallback eventCallback;
 
+    // 音效回调
+    public interface SoundCallback {
+        void onSound(int soundId);
+    }
+    public SoundCallback soundCallback;
+
     // 皮肤系统
     public SkinSystem skinSystem;
 
@@ -299,6 +305,10 @@ public class GameEngine {
                     // 所有命用完，游戏结束
                     gameOver = true;
                     gameRunning = false;
+                    // 触发死亡音效
+                    if (soundCallback != null) {
+                        soundCallback.onSound(SoundManager.SOUND_DEATH);
+                    }
                     if (callback != null) {
                         callback.onGameOver(totalScore, killCount, maxRadius, eatFoodCount, gameTime);
                     }
@@ -311,6 +321,10 @@ public class GameEngine {
                 // 自由模式/大逃杀：直接死亡
                 gameOver = true;
                 gameRunning = false;
+                // 触发死亡音效
+                if (soundCallback != null) {
+                    soundCallback.onSound(SoundManager.SOUND_DEATH);
+                }
                 if (callback != null) {
                     callback.onGameOver(totalScore, killCount, maxRadius, eatFoodCount, gameTime);
                 }
@@ -591,6 +605,10 @@ public class GameEngine {
                     if (eventCallback != null) {
                         eventCallback.onFoodEaten(food.x, food.y, food.color);
                     }
+                    // 触发吃食物音效
+                    if (soundCallback != null) {
+                        soundCallback.onSound(SoundManager.SOUND_EAT_FOOD);
+                    }
                 }
             }
         }
@@ -628,6 +646,10 @@ public class GameEngine {
                     // 触发球被吃事件
                     if (eventCallback != null) {
                         eventCallback.onBallEaten(ai.x, ai.y, ai.color, ai.radius);
+                    }
+                    // 触发吃球音效
+                    if (soundCallback != null) {
+                        soundCallback.onSound(SoundManager.SOUND_EAT_BALL);
                     }
                 } else if (ai.canEat(playerBall)) {
                     // 无敌状态下不会被吃
@@ -687,6 +709,10 @@ public class GameEngine {
                     // 产生粒子效果
                     if (eventCallback != null) {
                         eventCallback.onBallEaten(v.x, v.y, 0xFF22AA22, v.radius);
+                    }
+                    // 触发刺球碰撞音效
+                    if (soundCallback != null) {
+                        soundCallback.onSound(SoundManager.SOUND_HIT_VIRUS);
                     }
                 }
                 // 小球可以穿过刺球（不做处理）
@@ -853,6 +879,10 @@ public class GameEngine {
         if (!canSplit()) return;
 
         splitCooldownTimer = SPLIT_COOLDOWN;
+        // 触发分裂音效
+        if (soundCallback != null) {
+            soundCallback.onSound(SoundManager.SOUND_SPLIT);
+        }
         List<Ball> newBalls = new ArrayList<>();
 
         for (Ball b : playerBalls) {
@@ -903,6 +933,10 @@ public class GameEngine {
         if (!canSpit()) return;
 
         spitCooldownTimer = SPIT_COOLDOWN;
+        // 触发吐球音效
+        if (soundCallback != null) {
+            soundCallback.onSound(SoundManager.SOUND_SPIT);
+        }
 
         // 主球吐球
         if (player != null && player.alive && player.radius > SPIT_RADIUS * 2) {
@@ -963,6 +997,10 @@ public class GameEngine {
                     target.mergeWith(b);
                     b.alive = false;
                     playerBalls.remove(i);
+                    // 触发合并音效
+                    if (soundCallback != null) {
+                        soundCallback.onSound(SoundManager.SOUND_MERGE);
+                    }
                 }
             }
         }
