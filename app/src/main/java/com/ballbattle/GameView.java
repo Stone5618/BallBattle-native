@@ -33,6 +33,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
     private SurfaceHolder holder;
     private GameEngine engine;
     private GameThread gameThread;
+    private RankSystem rankSystem;
 
     // 画笔
     private final Paint bgPaint = new Paint();
@@ -68,6 +69,16 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         int color;
     }
     private final List<Particle> particles = new ArrayList<>();
+
+    // 残影系统
+    private static class TrailPoint {
+        float x, y, radius;
+        float life;
+        int color;
+    }
+    private final List<TrailPoint> trailPoints = new ArrayList<>();
+    private float trailTimer = 0f;
+    private static final float TRAIL_INTERVAL = 0.03f;  // 残影生成间隔
 
     public interface OnGameOverListener {
         void onGameOver(int score, int killCount, float maxRadius, int eatFoodCount, float gameTime);
@@ -266,6 +277,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
 
     public void startGame() {
         particles.clear();
+        trailPoints.clear();
+        trailTimer = 0f;
         engine.setGameCallback(new GameEngine.GameCallback() {
             @Override
             public void onGameOver(int score, int killCount, float maxRadius, int eatFoodCount, float gameTime) {
@@ -288,11 +301,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
                 spawnParticles(x, y, color, 10 + (int)(Math.random() * 6), 250f);
             }
         };
-        engine.initGame();
+        engine.initGame(engine.currentMode);
     }
 
     public GameEngine getEngine() {
         return engine;
+    }
+
+    public void setRankSystem(RankSystem rs) {
+        this.rankSystem = rs;
     }
 
     @Override
@@ -365,6 +382,26 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
                     if (p.life <= 0) particles.remove(i);
                 }
 
+                // 更新残影
+                SkinSystem skinSys = engine.skinSystem;
+                if (skinSys != null && skinSys.hasTrail() && engine.player != null && engine.player.alive) {
+                    trailTimer += deltaTime;
+                    if (trailTimer >= TRAIL_INTERVAL) {
+                        trailTimer = 0f;
+                        TrailPoint tp = new TrailPoint();
+                        tp.x = engine.player.x;
+                        tp.y = engine.player.y;
+                        tp.radius = engine.player.radius;
+                        tp.life = 0.5f;
+                        tp.color = skinSys.getSelectedTrailColor();
+                        trailPoints.add(tp);
+                    }
+                }
+                for (int i = trailPoints.size() - 1; i >= 0; i--) {
+                    trailPoints.get(i).life -= deltaTime;
+                    if (trailPoints.get(i).life <= 0) trailPoints.remove(i);
+                }
+
                 Canvas canvas = null;
                 try {
                     canvas = holder.lockCanvas();
@@ -423,26 +460,47 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         // 3. 边界
         drawBorder(canvas, cameraX, cameraY);
 
+        // 3.5 安全区（大逃杀模式）
+        drawSafeZone(canvas, cameraX, cameraY, viewWidth, viewHeight);
+
         // 4. 食物
         List<Food> foods = engine.getAliveFoods();
         for (Food food : foods) {
             food.draw(canvas, ballPaint, cameraX, cameraY, (int)viewWidth, (int)viewHeight);
         }
 
-        // 5. 粒子特效
+        // 5. 刺球
+        List<Virus> viruses = engine.getAliveViruses();
+        for (Virus v : viruses) {
+            v.draw(canvas, ballPaint, cameraX, cameraY, (int)viewWidth, (int)viewHeight);
+        }
+
+        // 6. 粒子特效
         drawParticles(canvas, cameraX, cameraY, viewWidth, viewHeight);
 
-        // 6. AI球
+        // 7. 残影（在玩家球之前绘制）
+        drawTrails(canvas, cameraX, cameraY, viewWidth, viewHeight);
+
+        // 8. AI球
         List<Ball> aiBalls = engine.getAliveAIBalls();
         for (Ball ai : aiBalls) {
             ai.draw(canvas, ballPaint, cameraX, cameraY, (int)viewWidth, (int)viewHeight);
         }
 
-        // 7. 玩家球（包括分身）
+        // 8. 玩家球（包括分身）
         List<Ball> playerBalls = engine.getAlivePlayerBalls();
         for (Ball playerBall : playerBalls) {
+            // 无敌闪烁效果：每0.2秒切换
+            if (playerBall.invincible) {
+                if ((int)(engine.getGameTime() * 5) % 2 == 0) {
+                    continue;  // 不绘制（透明效果）
+                }
+            }
             playerBall.draw(canvas, ballPaint, cameraX, cameraY, (int)viewWidth, (int)viewHeight);
         }
+
+        // 9. 光环效果（在玩家球之后绘制）
+        drawAuras(canvas, cameraX, cameraY, viewWidth, viewHeight);
         
         // 恢复画布状态
         canvas.restore();
@@ -497,6 +555,42 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         canvas.drawRect(left, top, right, bottom, borderPaint);
     }
 
+    /**
+     * 绘制安全区（大逃杀模式）
+     */
+    private void drawSafeZone(Canvas canvas, float cameraX, float cameraY, float viewWidth, float viewHeight) {
+        if (engine.currentMode != GameEngine.GameMode.BATTLE_ROYALE) return;
+
+        float screenCenterX = engine.safeZoneCenterX - cameraX;
+        float screenCenterY = engine.safeZoneCenterY - cameraY;
+
+        // 绘制安全区外区域（红色半透明遮罩）
+        Paint dangerPaint = new Paint();
+        dangerPaint.setColor(0x30FF0000);
+        dangerPaint.setStyle(android.graphics.Paint.Style.FILL);
+        canvas.drawRect(0, 0, viewWidth, viewHeight, dangerPaint);
+
+        // 绘制安全区圆形区域（蓝色半透明覆盖，遮住红色）
+        Paint safePaint = new Paint();
+        safePaint.setColor(0x300044FF);
+        safePaint.setStyle(android.graphics.Paint.Style.FILL);
+        canvas.drawCircle(screenCenterX, screenCenterY, engine.safeZoneRadius, safePaint);
+
+        // 绘制安全区边界线
+        safePaint.setColor(0xFF0066FF);
+        safePaint.setStyle(android.graphics.Paint.Style.STROKE);
+        safePaint.setStrokeWidth(3f);
+        canvas.drawCircle(screenCenterX, screenCenterY, engine.safeZoneRadius, safePaint);
+
+        // 绘制下一次缩圈预览
+        if (engine.targetSafeZoneRadius < engine.safeZoneRadius - 10f) {
+            safePaint.setColor(0x300000FF);
+            safePaint.setStyle(android.graphics.Paint.Style.STROKE);
+            safePaint.setStrokeWidth(2f);
+            canvas.drawCircle(screenCenterX, screenCenterY, engine.targetSafeZoneRadius, safePaint);
+        }
+    }
+
     private void drawHUD(Canvas canvas) {
         // 分数
         hudPaint.setColor(0xFFFFFFFF);
@@ -519,20 +613,68 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         canvas.drawText("对手: " + aliveAI, 20, 97, hudPaint);
 
         // 游戏时间（居中显示）
-        float timeLeft = Math.max(0, 300f - engine.getGameTime());
-        int minutes = (int)(timeLeft / 60);
-        int seconds = (int)(timeLeft % 60);
-        String timeStr = String.format("%d:%02d", minutes, seconds);
-        hudPaint.setTextSize(28f);
-        hudPaint.setColor(timeLeft < 60 ? 0xFFFF4444 : 0xFFFFFFFF);
-        hudPaint.setTextAlign(Paint.Align.CENTER);
-        canvas.drawText(timeStr, screenWidth / 2f, 45, hudPaint);
-        
+        if (engine.currentMode == GameEngine.GameMode.FREE) {
+            float timeLeft = Math.max(0, 300f - engine.getGameTime());
+            int minutes = (int)(timeLeft / 60);
+            int seconds = (int)(timeLeft % 60);
+            String timeStr = String.format("%d:%02d", minutes, seconds);
+            hudPaint.setTextSize(28f);
+            hudPaint.setColor(timeLeft < 60 ? 0xFFFF4444 : 0xFFFFFFFF);
+            hudPaint.setTextAlign(Paint.Align.CENTER);
+            canvas.drawText(timeStr, screenWidth / 2f, 45, hudPaint);
+        } else if (engine.currentMode == GameEngine.GameMode.SURVIVAL) {
+            // 生存模式显示存活时间
+            int minutes = (int)(engine.getGameTime() / 60);
+            int seconds = (int)(engine.getGameTime() % 60);
+            String timeStr = String.format("%d:%02d", minutes, seconds);
+            hudPaint.setTextSize(28f);
+            hudPaint.setColor(0xFFFFFFFF);
+            hudPaint.setTextAlign(Paint.Align.CENTER);
+            canvas.drawText(timeStr, screenWidth / 2f, 45, hudPaint);
+        } else if (engine.currentMode == GameEngine.GameMode.BATTLE_ROYALE) {
+            // 大逃杀模式显示存活人数
+            hudPaint.setTextSize(28f);
+            hudPaint.setColor(0xFFFFFFFF);
+            hudPaint.setTextAlign(Paint.Align.CENTER);
+            canvas.drawText("存活: " + (aliveAI + 1), screenWidth / 2f, 45, hudPaint);
+        }
+
         // 击杀数（右上角）
         hudPaint.setTextSize(22f);
         hudPaint.setColor(0xCCFFFFFF);
         hudPaint.setTextAlign(Paint.Align.RIGHT);
         canvas.drawText("击杀: " + engine.killCount, screenWidth - 20, 45, hudPaint);
+
+        // 生存模式 - 显示生命值
+        if (engine.currentMode == GameEngine.GameMode.SURVIVAL) {
+            hudPaint.setColor(0xFFFF4444);
+            hudPaint.setTextSize(28f);
+            hudPaint.setTextAlign(Paint.Align.CENTER);
+            String livesStr = "";
+            for (int i = 0; i < engine.lives; i++) {
+                livesStr += "\u2665 ";  // 心形符号
+            }
+            canvas.drawText(livesStr.trim(), screenWidth / 2f, 80, hudPaint);
+        }
+
+        // 大逃杀模式 - 显示安全区倒计时
+        if (engine.currentMode == GameEngine.GameMode.BATTLE_ROYALE) {
+            float timeLeft = Math.max(0, 30f - engine.safeZoneTimer);
+            if (timeLeft <= 5f) {
+                hudPaint.setTextSize(22f);
+                hudPaint.setColor(0xFFFF4444);
+                hudPaint.setTextAlign(Paint.Align.CENTER);
+                canvas.drawText("缩圈: " + (int)timeLeft + "s", screenWidth / 2f, 80, hudPaint);
+            }
+        }
+
+        // 段位显示（左上角，对手数下方）
+        if (rankSystem != null) {
+            hudPaint.setColor(rankSystem.getRankColor());
+            hudPaint.setTextSize(20f);
+            hudPaint.setTextAlign(Paint.Align.LEFT);
+            canvas.drawText(rankSystem.getRankName() + " " + rankSystem.getStars() + "/" + rankSystem.getMaxStars() + "\u2605", 20, 122, hudPaint);
+        }
     }
 
     private void drawMinimap(Canvas canvas) {
@@ -749,6 +891,62 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
 
             String text = (i + 1) + ". " + entry.name + " " + (int)entry.radius;
             canvas.drawText(text, boardX, y, rankPaint);
+        }
+    }
+
+    /**
+     * 绘制残影效果
+     */
+    private void drawTrails(Canvas canvas, float cameraX, float cameraY, float viewWidth, float viewHeight) {
+        if (trailPoints.isEmpty()) return;
+        for (TrailPoint tp : trailPoints) {
+            float screenX = tp.x - cameraX;
+            float screenY = tp.y - cameraY;
+            if (screenX < -50 || screenX > viewWidth + 50 || screenY < -50 || screenY > viewHeight + 50) continue;
+            float alpha = tp.life / 0.5f;
+            int a = (int)(alpha * 100);
+            ballPaint.setColor((tp.color & 0x00FFFFFF) | (a << 24));
+            canvas.drawCircle(screenX, screenY, tp.radius * alpha, ballPaint);
+        }
+    }
+
+    /**
+     * 绘制光环效果
+     */
+    private void drawAuras(Canvas canvas, float cameraX, float cameraY, float viewWidth, float viewHeight) {
+        if (engine.skinSystem == null || !engine.skinSystem.hasAura()) return;
+        if (engine.player == null || !engine.player.alive) return;
+
+        int auraColor = engine.skinSystem.getSelectedAuraColor();
+        Paint auraPaint = new Paint();
+        auraPaint.setColor(auraColor);
+        auraPaint.setStyle(Paint.Style.STROKE);
+        auraPaint.setStrokeWidth(4f);
+        auraPaint.setAntiAlias(true);
+
+        // 对所有存活的玩家球绘制光环
+        List<Ball> playerBalls = engine.getAlivePlayerBalls();
+        float time = engine.getGameTime();
+
+        for (Ball playerBall : playerBalls) {
+            float screenX = playerBall.x - cameraX;
+            float screenY = playerBall.y - cameraY;
+
+            // 视口剔除
+            if (screenX + playerBall.radius + 30 < 0 || screenX - playerBall.radius - 30 > viewWidth
+                    || screenY + playerBall.radius + 30 < 0 || screenY - playerBall.radius - 30 > viewHeight) {
+                continue;
+            }
+
+            // 第一层光环 - 呼吸效果
+            float auraRadius = playerBall.radius + 10f + (float)Math.sin(time * 2) * 3f;
+            auraPaint.setStrokeWidth(4f);
+            canvas.drawCircle(screenX, screenY, auraRadius, auraPaint);
+
+            // 第二层光环 - 反向呼吸
+            auraRadius = playerBall.radius + 18f + (float)Math.cos(time * 3) * 3f;
+            auraPaint.setStrokeWidth(2f);
+            canvas.drawCircle(screenX, screenY, auraRadius, auraPaint);
         }
     }
 }

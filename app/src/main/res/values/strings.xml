@@ -6,4 +6,21 @@
     <string name="your_score">你的得分</string>
     <string name="restart">重新开始</string>
     <string name="score_label">分数</string>
+    <string name="skin_shop">皮肤</string>
+    <string name="check_in">签到</string>
+    <string name="rank">段位</string>
+    <string name="coins_display">金币: 0</string>
+    <string name="skin_title">皮肤商店</string>
+    <string name="color_skin">颜色皮肤</string>
+    <string name="aura_skin">光环皮肤</string>
+    <string name="trail_skin">残影皮肤</string>
+    <string name="equipped">已装备</string>
+    <string name="unlock">解锁</string>
+    <string name="locked">未解锁</string>
+    <string name="insufficient_coins">金币不足</string>
+    <string name="unlock_success">解锁成功！</string>
+    <string name="checkin_success">签到成功！</string>
+    <string name="already_checked_in">今日已签到</string>
+    <string name="ok">好的</string>
+    <string name="back_to_menu">返回菜单</string>
 </resources>

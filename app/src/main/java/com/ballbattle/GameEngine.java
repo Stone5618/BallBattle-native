@@ -9,6 +9,15 @@ import java.util.Random;
  */
 public class GameEngine {
 
+    // 游戏模式枚举
+    public enum GameMode {
+        FREE,           // 自由模式
+        SURVIVAL,       // 生存模式
+        BATTLE_ROYALE   // 大逃杀模式
+    }
+
+    public GameMode currentMode = GameMode.FREE;
+
     // 世界参数 - 大地图
     public static final int WORLD_WIDTH = 10000;
     public static final int WORLD_HEIGHT = 10000;
@@ -21,6 +30,7 @@ public class GameEngine {
     private static final float AI_FOOD_DETECT_RANGE = 400f;
     private static final float AI_DANGER_DETECT_RANGE = 350f;
     private static final float FOOD_RESPAWN_INTERVAL = 0.5f;
+    private static final int VIRUS_COUNT = 30;
 
     // AI 颜色池
     private static final int[] AI_COLORS = {
@@ -41,6 +51,7 @@ public class GameEngine {
     public final List<Ball> playerBalls = new ArrayList<>();  // 玩家所有球（包括分身）
     private final List<Ball> aiBalls = new ArrayList<>();
     private final List<Food> foods = new ArrayList<>();
+    private final List<Virus> viruses = new ArrayList<>();
 
     // 分身相关常量
     private static final int MAX_SPLIT_COUNT = 16;
@@ -77,6 +88,22 @@ public class GameEngine {
     // 视野缩放
     private float viewScale = 1.0f;
 
+    // 生存模式
+    public int lives = 3;
+    private static final int MAX_LIVES = 3;
+    private float survivalScore = 0f;  // 存活时间得分
+
+    // 大逃杀模式 - 安全区
+    public float safeZoneCenterX = WORLD_WIDTH / 2f;
+    public float safeZoneCenterY = WORLD_HEIGHT / 2f;
+    public float safeZoneRadius = 4500f;  // 初始安全区半径
+    public float targetSafeZoneRadius = 4500f;
+    private static final float SAFE_ZONE_SHRINK_INTERVAL = 30f;  // 每30秒缩小
+    public float safeZoneTimer = 0f;
+    private static final float SAFE_ZONE_SHRINK_RATIO = 0.85f;  // 每次缩小15%
+    private static final float MIN_SAFE_ZONE_RADIUS = 200f;
+    public float safeZoneDamage = 5f;  // 每秒伤害（扣体积）
+
     // 回调接口
     public interface GameCallback {
         void onGameOver(int score, int killCount, float maxRadius, int eatFoodCount, float gameTime);
@@ -91,14 +118,27 @@ public class GameEngine {
     }
     public GameEventCallback eventCallback;
 
+    // 皮肤系统
+    public SkinSystem skinSystem;
+
+    public void setSkinSystem(SkinSystem ss) {
+        this.skinSystem = ss;
+    }
+
     public void setGameCallback(GameCallback callback) {
         this.callback = callback;
     }
 
     public void initGame() {
+        initGame(GameMode.FREE);
+    }
+
+    public void initGame(GameMode mode) {
+        this.currentMode = mode;
         aiBalls.clear();
         foods.clear();
         playerBalls.clear();
+        viruses.clear();
         totalScore = 0;
         killCount = 0;
         maxRadius = 0f;
@@ -111,10 +151,26 @@ public class GameEngine {
         splitCooldownTimer = 0f;
         spitCooldownTimer = 0f;
 
+        // 生存模式初始化
+        if (mode == GameMode.SURVIVAL) {
+            lives = MAX_LIVES;
+            survivalScore = 0f;
+        }
+
+        // 大逃杀模式初始化
+        if (mode == GameMode.BATTLE_ROYALE) {
+            safeZoneCenterX = WORLD_WIDTH / 2f;
+            safeZoneCenterY = WORLD_HEIGHT / 2f;
+            safeZoneRadius = 4500f;
+            targetSafeZoneRadius = 4500f;
+            safeZoneTimer = 0f;
+        }
+
         // 创建玩家 - 随机位置
         float px = 500 + random.nextFloat() * (WORLD_WIDTH - 1000);
         float py = 500 + random.nextFloat() * (WORLD_HEIGHT - 1000);
-        player = new Ball(px, py, PLAYER_INITIAL_RADIUS, 0xFF44FF44, "我");
+        int playerColor = (skinSystem != null) ? skinSystem.getSelectedColor() : 0xFF44FF44;
+        player = new Ball(px, py, PLAYER_INITIAL_RADIUS, playerColor, "我");
         player.isAI = false;
         player.isMainBall = true;
         player.ballIndex = 0;
@@ -128,6 +184,13 @@ public class GameEngine {
         // 创建食物
         for (int i = 0; i < FOOD_COUNT; i++) {
             createFood();
+        }
+
+        // 创建刺球
+        for (int i = 0; i < VIRUS_COUNT; i++) {
+            float vx = 200f + random.nextFloat() * (WORLD_WIDTH - 400f);
+            float vy = 200f + random.nextFloat() * (WORLD_HEIGHT - 400f);
+            viruses.add(new Virus(vx, vy));
         }
     }
 
@@ -202,6 +265,22 @@ public class GameEngine {
         }
         checkBallCollisions();
 
+        // 刺球碰撞检测
+        checkVirusCollisions();
+
+        // 更新刺球重生
+        for (Virus v : viruses) {
+            if (!v.alive) {
+                v.respawnTimer += deltaTime;
+                if (v.respawnTimer >= Virus.RESPAWN_TIME) {
+                    v.alive = true;
+                    v.respawnTimer = 0f;
+                    v.x = 200f + random.nextFloat() * (WORLD_WIDTH - 400f);
+                    v.y = 200f + random.nextFloat() * (WORLD_HEIGHT - 400f);
+                }
+            }
+        }
+
         // 检查分身合并
         checkMerge();
 
@@ -214,12 +293,29 @@ public class GameEngine {
             }
         }
         if (!anyAlive) {
-            gameOver = true;
-            gameRunning = false;
-            if (callback != null) {
-                callback.onGameOver(totalScore, killCount, maxRadius, eatFoodCount, gameTime);
+            if (currentMode == GameMode.SURVIVAL) {
+                lives--;
+                if (lives <= 0) {
+                    // 所有命用完，游戏结束
+                    gameOver = true;
+                    gameRunning = false;
+                    if (callback != null) {
+                        callback.onGameOver(totalScore, killCount, maxRadius, eatFoodCount, gameTime);
+                    }
+                    return;
+                } else {
+                    // 重生玩家
+                    respawnPlayer();
+                }
+            } else {
+                // 自由模式/大逃杀：直接死亡
+                gameOver = true;
+                gameRunning = false;
+                if (callback != null) {
+                    callback.onGameOver(totalScore, killCount, maxRadius, eatFoodCount, gameTime);
+                }
+                return;
             }
-            return;
         }
 
         // 补充食物
@@ -266,14 +362,19 @@ public class GameEngine {
             maxRadius = currentMaxRadius;
         }
 
-        // 5分钟倒计时结束
-        if (gameTime >= GAME_DURATION) {
+        // 5分钟倒计时结束（仅自由模式）
+        if (currentMode == GameMode.FREE && gameTime >= GAME_DURATION) {
             gameOver = true;
             gameRunning = false;
             if (callback != null) {
                 callback.onGameOver(totalScore, killCount, maxRadius, eatFoodCount, gameTime);
             }
             return;
+        }
+
+        // 大逃杀模式 - 安全区逻辑
+        if (currentMode == GameMode.BATTLE_ROYALE) {
+            updateSafeZone(deltaTime);
         }
     }
 
@@ -354,6 +455,33 @@ public class GameEngine {
                     }
                 }
                 // 中等AI保持现有行为（走下面的通用逻辑）
+            }
+
+            // 检测危险（比自己大的球）
+            if (!hasTarget) {
+                // AI躲避刺球
+                if (isNearVirus(ai)) {
+                    // 找到最近的刺球并反方向逃跑
+                    Virus nearestVirus = null;
+                    float nearestVirusDist = Float.MAX_VALUE;
+                    for (Virus v : viruses) {
+                        if (!v.alive || ai.radius <= v.radius) continue;
+                        float dx = ai.x - v.x;
+                        float dy = ai.y - v.y;
+                        float dist = (float)Math.sqrt(dx*dx + dy*dy);
+                        if (dist < nearestVirusDist) {
+                            nearestVirusDist = dist;
+                            nearestVirus = v;
+                        }
+                    }
+                    if (nearestVirus != null && nearestVirusDist > 0.001f) {
+                        float dx = ai.x - nearestVirus.x;
+                        float dy = ai.y - nearestVirus.y;
+                        float dist = (float)Math.sqrt(dx*dx + dy*dy);
+                        ai.setDirection(dx / dist, dy / dist);
+                        hasTarget = true;
+                    }
+                }
             }
 
             // 检测危险（比自己大的球）
@@ -502,6 +630,8 @@ public class GameEngine {
                         eventCallback.onBallEaten(ai.x, ai.y, ai.color, ai.radius);
                     }
                 } else if (ai.canEat(playerBall)) {
+                    // 无敌状态下不会被吃
+                    if (playerBall.invincible) continue;
                     playerBall.alive = false;
                     ai.grow(playerBall.radius * playerBall.radius * 0.8f);
                     ai.score += playerBall.score + 50;
@@ -533,6 +663,106 @@ public class GameEngine {
                 }
             }
         }
+    }
+
+    /**
+     * 刺球碰撞检测
+     */
+    private void checkVirusCollisions() {
+        // 玩家球 vs 刺球
+        for (Ball pb : playerBalls) {
+            if (!pb.alive) continue;
+            for (Virus v : viruses) {
+                if (!v.alive) continue;
+                float dx = pb.x - v.x;
+                float dy = pb.y - v.y;
+                float dist = (float)Math.sqrt(dx*dx + dy*dy);
+
+                if (pb.radius > v.radius && dist < pb.radius) {
+                    // 大球触碰刺球 -> 强制分裂
+                    v.alive = false;
+                    v.respawnTimer = 0f;
+                    // 玩家分裂成多个小球
+                    forceSplit(pb);
+                    // 产生粒子效果
+                    if (eventCallback != null) {
+                        eventCallback.onBallEaten(v.x, v.y, 0xFF22AA22, v.radius);
+                    }
+                }
+                // 小球可以穿过刺球（不做处理）
+            }
+        }
+
+        // AI球 vs 刺球
+        for (Ball ai : aiBalls) {
+            if (!ai.alive) continue;
+            for (Virus v : viruses) {
+                if (!v.alive) continue;
+                float dx = ai.x - v.x;
+                float dy = ai.y - v.y;
+                float dist = (float)Math.sqrt(dx*dx + dy*dy);
+
+                if (ai.radius > v.radius && dist < ai.radius) {
+                    v.alive = false;
+                    v.respawnTimer = 0f;
+                    // AI被刺球分裂后死亡（简化处理）
+                    ai.alive = false;
+                    if (eventCallback != null) {
+                        eventCallback.onBallEaten(v.x, v.y, 0xFF22AA22, v.radius);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 强制分裂方法（被刺球触发）
+     */
+    private void forceSplit(Ball ball) {
+        int splitCount = Math.min(4, MAX_SPLIT_COUNT - playerBalls.size());
+        if (splitCount <= 0) {
+            // 没有分身名额，直接缩小
+            ball.radius = (float)(ball.radius / Math.sqrt(2));
+            return;
+        }
+
+        float newRadius = (float)(ball.radius / Math.sqrt(splitCount + 1));
+        ball.radius = newRadius;
+
+        for (int i = 0; i < splitCount; i++) {
+            Ball newBall = new Ball(ball.x, ball.y, newRadius, ball.color, ball.name);
+            newBall.isMainBall = false;
+            newBall.ballIndex = playerBalls.size();
+            newBall.mergeTimer = 0f;
+            newBall.isAI = false;
+            newBall.score = ball.score / (splitCount + 1);
+
+            float angle = (float)(i * 2 * Math.PI / splitCount);
+            float speed = 350f;
+            newBall.vx = (float)Math.cos(angle) * speed;
+            newBall.vy = (float)Math.sin(angle) * speed;
+            newBall.directionX = (float)Math.cos(angle);
+            newBall.directionY = (float)Math.sin(angle);
+
+            playerBalls.add(newBall);
+        }
+        ball.score = ball.score / (splitCount + 1);
+    }
+
+    /**
+     * 检查AI是否靠近刺球
+     */
+    private boolean isNearVirus(Ball ai) {
+        for (Virus v : viruses) {
+            if (!v.alive) continue;
+            float dx = ai.x - v.x;
+            float dy = ai.y - v.y;
+            float dist = (float)Math.sqrt(dx*dx + dy*dy);
+            if (dist < ai.radius + v.radius + 50f && ai.radius > v.radius) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void updateCamera() {
@@ -573,6 +803,14 @@ public class GameEngine {
         List<Food> alive = new ArrayList<>();
         for (Food food : foods) {
             if (food.alive) alive.add(food);
+        }
+        return alive;
+    }
+
+    public List<Virus> getAliveViruses() {
+        List<Virus> alive = new ArrayList<>();
+        for (Virus v : viruses) {
+            if (v.alive) alive.add(v);
         }
         return alive;
     }
@@ -810,5 +1048,95 @@ public class GameEngine {
 
     public float getGameTime() {
         return gameTime;
+    }
+
+    /**
+     * 重生玩家（生存模式）
+     */
+    private void respawnPlayer() {
+        float px = 500 + random.nextFloat() * (WORLD_WIDTH - 1000);
+        float py = 500 + random.nextFloat() * (WORLD_HEIGHT - 1000);
+
+        playerBalls.clear();
+        int respawnColor = (skinSystem != null) ? skinSystem.getSelectedColor() : 0xFF44FF44;
+        player = new Ball(px, py, PLAYER_INITIAL_RADIUS, respawnColor, "我");
+        player.isMainBall = true;
+        player.alive = true;
+        player.isAI = false;
+        player.ballIndex = 0;
+        playerBalls.add(player);
+
+        // 重生无敌时间（3秒）
+        player.invincible = true;
+        player.invincibleTimer = 3f;
+    }
+
+    /**
+     * 更新大逃杀安全区
+     */
+    private void updateSafeZone(float deltaTime) {
+        // 缩圈计时
+        safeZoneTimer += deltaTime;
+        if (safeZoneTimer >= SAFE_ZONE_SHRINK_INTERVAL) {
+            safeZoneTimer = 0f;
+            targetSafeZoneRadius *= SAFE_ZONE_SHRINK_RATIO;
+            if (targetSafeZoneRadius < MIN_SAFE_ZONE_RADIUS) {
+                targetSafeZoneRadius = MIN_SAFE_ZONE_RADIUS;
+            }
+            // 随机偏移安全区中心
+            safeZoneCenterX += (random.nextFloat() - 0.5f) * 200f;
+            safeZoneCenterY += (random.nextFloat() - 0.5f) * 200f;
+            // 限制在地图内
+            safeZoneCenterX = Math.max(targetSafeZoneRadius, Math.min(WORLD_WIDTH - targetSafeZoneRadius, safeZoneCenterX));
+            safeZoneCenterY = Math.max(targetSafeZoneRadius, Math.min(WORLD_HEIGHT - targetSafeZoneRadius, safeZoneCenterY));
+        }
+
+        // 平滑缩圈
+        if (safeZoneRadius > targetSafeZoneRadius) {
+            safeZoneRadius -= (safeZoneRadius - targetSafeZoneRadius) * deltaTime * 0.5f;
+        }
+
+        // 安全区外伤害 - 玩家
+        for (Ball pb : playerBalls) {
+            if (!pb.alive) continue;
+            float dx = pb.x - safeZoneCenterX;
+            float dy = pb.y - safeZoneCenterY;
+            float dist = (float) Math.sqrt(dx * dx + dy * dy);
+            if (dist > safeZoneRadius) {
+                // 在安全区外，持续扣体积
+                pb.radius -= safeZoneDamage * deltaTime;
+                if (pb.radius < 10f) {
+                    pb.alive = false;
+                }
+            }
+        }
+
+        // 检查玩家是否全部死亡（安全区外伤害导致）
+        boolean anyPlayerAlive = false;
+        for (Ball b : playerBalls) {
+            if (b.alive) { anyPlayerAlive = true; break; }
+        }
+        if (!anyPlayerAlive) {
+            gameOver = true;
+            gameRunning = false;
+            if (callback != null) {
+                callback.onGameOver(totalScore, killCount, maxRadius, eatFoodCount, gameTime);
+            }
+            return;
+        }
+
+        // 安全区外伤害 - AI
+        for (Ball ai : aiBalls) {
+            if (!ai.alive) continue;
+            float dx = ai.x - safeZoneCenterX;
+            float dy = ai.y - safeZoneCenterY;
+            float dist = (float) Math.sqrt(dx * dx + dy * dy);
+            if (dist > safeZoneRadius) {
+                ai.radius -= safeZoneDamage * deltaTime;
+                if (ai.radius < 10f) {
+                    ai.alive = false;
+                }
+            }
+        }
     }
 }

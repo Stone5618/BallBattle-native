@@ -33,6 +33,10 @@ public class Ball {
     public float directionX = 0f;           // 当前移动方向X
     public float directionY = 0f;           // 当前移动方向Y
 
+    // 无敌状态（生存模式重生后）
+    public boolean invincible = false;
+    public float invincibleTimer = 0f;
+
     private static final float MIN_RADIUS = 15f;
     private static final float MAX_RADIUS = 200f;
 
@@ -56,6 +60,15 @@ public class Ball {
     public void update(float deltaTime, float worldWidth, float worldHeight) {
         x += vx * deltaTime;
         y += vy * deltaTime;
+
+        // 更新无敌计时器
+        if (invincible) {
+            invincibleTimer -= deltaTime;
+            if (invincibleTimer <= 0) {
+                invincible = false;
+                invincibleTimer = 0f;
+            }
+        }
 
         // 边界检测 - 限制在世界范围内
         if (x - radius < 0) {
