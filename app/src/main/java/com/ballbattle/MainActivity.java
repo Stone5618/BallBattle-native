@@ -38,8 +38,8 @@ public class MainActivity extends Activity {
         // 设置游戏结束监听
         gameView.setOnGameOverListener(new GameView.OnGameOverListener() {
             @Override
-            public void onGameOver(int score) {
-                showGameOverDialog(score);
+            public void onGameOver(int score, int killCount, float maxRadius, int eatFoodCount, float gameTime) {
+                showGameOverDialog(score, killCount, maxRadius, eatFoodCount, gameTime);
             }
         });
 
@@ -70,20 +70,34 @@ public class MainActivity extends Activity {
     /**
      * 显示游戏结束对话框
      */
-    private void showGameOverDialog(int score) {
+    private void showGameOverDialog(int score, int killCount, float maxRadius, int eatFoodCount, float gameTime) {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 if (isFinishing() || isDestroyed()) return;
 
+                int minutes = (int)(gameTime / 60);
+                int seconds = (int)(gameTime % 60);
+
                 new AlertDialog.Builder(MainActivity.this)
                         .setTitle(R.string.game_over)
-                        .setMessage(getString(R.string.your_score) + ": " + score)
+                        .setMessage(
+                                "得分: " + score + "\n" +
+                                "击杀: " + killCount + "\n" +
+                                "最大体积: " + (int)maxRadius + "\n" +
+                                "吃食物: " + eatFoodCount + "\n" +
+                                "存活时间: " + minutes + "分" + seconds + "秒"
+                        )
                         .setPositiveButton(R.string.restart, new DialogInterface.OnClickListener() {
                             @Override
                             public void onClick(DialogInterface dialog, int which) {
-                                // 重新开始游戏
                                 gameView.startGame();
+                            }
+                        })
+                        .setNegativeButton("返回菜单", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                findViewById(R.id.btn_start).setVisibility(View.VISIBLE);
                             }
                         })
                         .setCancelable(false)

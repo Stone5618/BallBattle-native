@@ -6,20 +6,25 @@ import android.graphics.Paint;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
-import android.view.View;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
  * 游戏视图 - 基于 SurfaceView 的渲染层
- * 实现独立线程游戏循环，60FPS
+ * 实现独立线程游戏循环，60FPS，带虚拟摇杆
  */
 public class GameView extends SurfaceView implements SurfaceHolder.Callback {
 
     private static final int TARGET_FPS = 60;
     private static final float FRAME_TIME = 1f / TARGET_FPS;
-    private static final int GRID_SIZE = 100; // 网格间距
-    private static final int BORDER_WIDTH = 4; // 边界线宽度
+    private static final int GRID_SIZE = 100;
+    private static final int BORDER_WIDTH = 4;
+
+    // 虚拟摇杆参数
+    private static final float JOYSTICK_RADIUS = 80f;
+    private static final float JOYSTICK_CENTER_RADIUS = 30f;
+    private static final float JOYSTICK_MARGIN = 100f;
 
     private SurfaceHolder holder;
     private GameEngine engine;
@@ -33,16 +38,33 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
     private final Paint minimapPaint = new Paint();
     private final Paint minimapBgPaint = new Paint();
     private final Paint ballPaint = new Paint();
+    private final Paint joystickBgPaint = new Paint();
+    private final Paint joystickStickPaint = new Paint();
 
     // 屏幕尺寸
     private int screenWidth = 0;
     private int screenHeight = 0;
 
+    // 虚拟摇杆状态
+    private float joystickCenterX = 0;
+    private float joystickCenterY = 0;
+    private float joystickStickX = 0;
+    private float joystickStickY = 0;
+    private boolean joystickActive = false;
+    private int joystickPointerId = -1;
+
     // 游戏结束回调
     private OnGameOverListener gameOverListener;
 
+    // 粒子特效系统
+    private static class Particle {
+        float x, y, vx, vy, radius, life, maxLife;
+        int color;
+    }
+    private final List<Particle> particles = new ArrayList<>();
+
     public interface OnGameOverListener {
-        void onGameOver(int score);
+        void onGameOver(int score, int killCount, float maxRadius, int eatFoodCount, float gameTime);
     }
 
     public GameView(Context context) {
@@ -93,96 +115,144 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
 
         ballPaint.setAntiAlias(true);
 
-        // 设置触摸事件
-        setOnTouchListener(new OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                return handleTouchEvent(event);
-            }
-        });
+        // 摇杆画笔
+        joystickBgPaint.setColor(0x40000000);
+        joystickBgPaint.setStyle(Paint.Style.FILL);
+        joystickBgPaint.setAntiAlias(true);
+
+        joystickStickPaint.setColor(0x80FFFFFF);
+        joystickStickPaint.setStyle(Paint.Style.FILL);
+        joystickStickPaint.setAntiAlias(true);
     }
 
-    /**
-     * 处理触摸事件
-     */
-    private boolean handleTouchEvent(MotionEvent event) {
-        if (engine == null || !engine.gameRunning) return false;
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        int action = event.getActionMasked();
+        int pointerIndex = event.getActionIndex();
+        int pointerId = event.getPointerId(pointerIndex);
 
-        int action = event.getAction();
-        int pointerCount = event.getPointerCount();
+        switch (action) {
+            case MotionEvent.ACTION_DOWN:
+            case MotionEvent.ACTION_POINTER_DOWN:
+                // 检查是否按在摇杆区域（左下角）
+                float x = event.getX(pointerIndex);
+                float y = event.getY(pointerIndex);
+                
+                if (isInJoystickArea(x, y) && !joystickActive) {
+                    joystickActive = true;
+                    joystickPointerId = pointerId;
+                    joystickCenterX = x;
+                    joystickCenterY = y;
+                    updateJoystickStick(x, y);
+                    return true;
+                }
+                break;
 
-        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
-            // 使用第一个触摸点
-            float touchX = event.getX(0);
-            float touchY = event.getY(0);
-            engine.setPlayerDirection(touchX, touchY, screenWidth, screenHeight);
-            return true;
-        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-            engine.stopPlayer();
-            return true;
-        }
+            case MotionEvent.ACTION_MOVE:
+                // 更新摇杆位置
+                if (joystickActive) {
+                    int idx = event.findPointerIndex(joystickPointerId);
+                    if (idx >= 0) {
+                        updateJoystickStick(event.getX(idx), event.getY(idx));
+                    }
+                }
+                break;
 
-        // 多点触控处理
-        if (action == MotionEvent.ACTION_POINTER_UP) {
-            // 如果还有其他触摸点，使用最后一个
-            if (pointerCount > 1) {
-                int remainingIndex = (event.getActionIndex() == 0) ? 1 : 0;
-                float touchX = event.getX(remainingIndex);
-                float touchY = event.getY(remainingIndex);
-                engine.setPlayerDirection(touchX, touchY, screenWidth, screenHeight);
-            } else {
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_POINTER_UP:
+                if (pointerId == joystickPointerId) {
+                    joystickActive = false;
+                    joystickPointerId = -1;
+                    engine.stopPlayer();
+                }
+                break;
+
+            case MotionEvent.ACTION_CANCEL:
+                joystickActive = false;
+                joystickPointerId = -1;
                 engine.stopPlayer();
-            }
-            return true;
+                break;
         }
-
-        return false;
+        return true;
     }
 
     /**
-     * 设置游戏结束监听
+     * 检查触摸点是否在摇杆区域
      */
+    private boolean isInJoystickArea(float x, float y) {
+        // 左下角区域
+        float defaultCenterX = JOYSTICK_MARGIN + JOYSTICK_RADIUS;
+        float defaultCenterY = screenHeight - JOYSTICK_MARGIN - JOYSTICK_RADIUS;
+        float dist = (float) Math.sqrt((x - defaultCenterX) * (x - defaultCenterX) 
+                + (y - defaultCenterY) * (y - defaultCenterY));
+        return dist < JOYSTICK_RADIUS * 2;
+    }
+
+    /**
+     * 更新摇杆把手位置
+     */
+    private void updateJoystickStick(float x, float y) {
+        float dx = x - joystickCenterX;
+        float dy = y - joystickCenterY;
+        float dist = (float) Math.sqrt(dx * dx + dy * dy);
+        
+        float maxDist = JOYSTICK_RADIUS - JOYSTICK_CENTER_RADIUS;
+        
+        if (dist > maxDist) {
+            float ratio = maxDist / dist;
+            dx *= ratio;
+            dy *= ratio;
+        }
+        
+        joystickStickX = joystickCenterX + dx;
+        joystickStickY = joystickCenterY + dy;
+        
+        // 设置玩家方向
+        if (engine.gameRunning && dist > 10) {
+            engine.setPlayerDirection(dx, dy);
+        }
+    }
+
     public void setOnGameOverListener(OnGameOverListener listener) {
         this.gameOverListener = listener;
     }
 
-    /**
-     * 开始游戏
-     */
     public void startGame() {
+        particles.clear();
         engine.setGameCallback(new GameEngine.GameCallback() {
             @Override
-            public void onGameOver(int score) {
+            public void onGameOver(int score, int killCount, float maxRadius, int eatFoodCount, float gameTime) {
                 if (gameOverListener != null) {
-                    post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (gameOverListener != null) {
-                                gameOverListener.onGameOver(score);
-                            }
+                    post(() -> {
+                        if (gameOverListener != null) {
+                            gameOverListener.onGameOver(score, killCount, maxRadius, eatFoodCount, gameTime);
                         }
                     });
                 }
             }
         });
+        engine.eventCallback = new GameEngine.GameEventCallback() {
+            @Override
+            public void onFoodEaten(float x, float y, int color) {
+                spawnParticles(x, y, color, 5 + (int)(Math.random() * 4), 150f);
+            }
+            @Override
+            public void onBallEaten(float x, float y, int color, float radius) {
+                spawnParticles(x, y, color, 10 + (int)(Math.random() * 6), 250f);
+            }
+        };
         engine.initGame();
     }
 
-    /**
-     * 获取游戏引擎
-     */
     public GameEngine getEngine() {
         return engine;
     }
-
-    // ==================== SurfaceHolder.Callback ====================
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         screenWidth = getWidth();
         screenHeight = getHeight();
 
-        // 启动游戏线程
         if (gameThread == null || !gameThread.isRunning()) {
             gameThread = new GameThread();
             gameThread.setRunning(true);
@@ -213,11 +283,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         }
     }
 
-    // ==================== 游戏线程 ====================
-
-    /**
-     * 独立游戏循环线程
-     */
     private class GameThread extends Thread {
         private volatile boolean running = false;
 
@@ -238,15 +303,21 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
                 float deltaTime = (currentTime - lastTime) / 1_000_000_000f;
                 lastTime = currentTime;
 
-                // 限制 deltaTime 防止跳帧过大
                 if (deltaTime > 0.1f) {
                     deltaTime = 0.1f;
                 }
 
-                // 更新游戏逻辑
                 engine.update(deltaTime);
 
-                // 渲染
+                // 更新粒子
+                for (int i = particles.size() - 1; i >= 0; i--) {
+                    Particle p = particles.get(i);
+                    p.x += p.vx * deltaTime;
+                    p.y += p.vy * deltaTime;
+                    p.life -= deltaTime;
+                    if (p.life <= 0) particles.remove(i);
+                }
+
                 Canvas canvas = null;
                 try {
                     canvas = holder.lockCanvas();
@@ -265,7 +336,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
                     }
                 }
 
-                // 帧率控制
                 long elapsed = System.nanoTime() - currentTime;
                 long sleepTime = (long) (FRAME_TIME * 1_000_000_000f) - elapsed;
                 if (sleepTime > 0) {
@@ -279,83 +349,91 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         }
     }
 
-    // ==================== 渲染 ====================
-
-    /**
-     * 渲染一帧
-     */
     private void render(Canvas canvas) {
         if (canvas == null || screenWidth <= 0 || screenHeight <= 0) return;
 
-        // 计算摄像机偏移（使玩家居中）
-        float cameraX = engine.cameraX - screenWidth / 2f;
-        float cameraY = engine.cameraY - screenHeight / 2f;
+        // 获取视野缩放
+        float viewScale = engine.getViewScale();
+        
+        // 计算视野范围（根据缩放调整）
+        float viewWidth = screenWidth / viewScale;
+        float viewHeight = screenHeight / viewScale;
+        float cameraX = engine.cameraX - viewWidth / 2f;
+        float cameraY = engine.cameraY - viewHeight / 2f;
 
-        // 1. 绘制背景
+        // 保存画布状态
+        canvas.save();
+        
+        // 应用缩放
+        canvas.scale(viewScale, viewScale);
+        
+        // 1. 背景
         canvas.drawColor(0xFF1a1a2e);
 
-        // 2. 绘制网格
-        drawGrid(canvas, cameraX, cameraY);
+        // 2. 网格
+        drawGrid(canvas, cameraX, cameraY, viewWidth, viewHeight);
 
-        // 3. 绘制世界边界
+        // 3. 边界
         drawBorder(canvas, cameraX, cameraY);
 
-        // 4. 绘制食物
+        // 4. 食物
         List<Food> foods = engine.getAliveFoods();
         for (Food food : foods) {
-            food.draw(canvas, ballPaint, cameraX, cameraY, screenWidth, screenHeight);
+            food.draw(canvas, ballPaint, cameraX, cameraY, (int)viewWidth, (int)viewHeight);
         }
 
-        // 5. 绘制AI球
+        // 5. 粒子特效
+        drawParticles(canvas, cameraX, cameraY, viewWidth, viewHeight);
+
+        // 6. AI球
         List<Ball> aiBalls = engine.getAliveAIBalls();
         for (Ball ai : aiBalls) {
-            ai.draw(canvas, ballPaint, cameraX, cameraY, screenWidth, screenHeight);
+            ai.draw(canvas, ballPaint, cameraX, cameraY, (int)viewWidth, (int)viewHeight);
         }
 
-        // 6. 绘制玩家（最后绘制，确保在最上层）
+        // 7. 玩家
         if (engine.player != null && engine.player.alive) {
-            engine.player.draw(canvas, ballPaint, cameraX, cameraY, screenWidth, screenHeight);
+            engine.player.draw(canvas, ballPaint, cameraX, cameraY, (int)viewWidth, (int)viewHeight);
         }
+        
+        // 恢复画布状态
+        canvas.restore();
 
-        // 7. 绘制HUD
+        // 8. 危险红边警告
+        drawDangerWarning(canvas);
+
+        // 9. HUD（不缩放）
         drawHUD(canvas);
 
-        // 8. 绘制小地图
+        // 10. 小地图（不缩放）
         drawMinimap(canvas);
+
+        // 11. 虚拟摇杆（不缩放）
+        drawJoystick(canvas);
     }
 
-    /**
-     * 绘制网格线
-     */
-    private void drawGrid(Canvas canvas, float cameraX, float cameraY) {
-        // 计算可见区域在世界坐标中的范围
+    private void drawGrid(Canvas canvas, float cameraX, float cameraY, float viewWidth, float viewHeight) {
         float worldLeft = cameraX;
         float worldTop = cameraY;
-        float worldRight = cameraX + screenWidth;
-        float worldBottom = cameraY + screenHeight;
+        float worldRight = cameraX + viewWidth;
+        float worldBottom = cameraY + viewHeight;
 
-        // 计算起始网格线
         int startX = (int) (worldLeft / GRID_SIZE) * GRID_SIZE;
         int startY = (int) (worldTop / GRID_SIZE) * GRID_SIZE;
 
-        // 绘制垂直线
         for (int x = startX; x <= worldRight; x += GRID_SIZE) {
             if (x < 0 || x > GameEngine.WORLD_WIDTH) continue;
             float screenX = x - cameraX;
-            canvas.drawLine(screenX, 0, screenX, screenHeight, gridPaint);
+            canvas.drawLine(screenX, 0, screenX, viewHeight, gridPaint);
         }
 
-        // 绘制水平线
         for (int y = startY; y <= worldBottom; y += GRID_SIZE) {
             if (y < 0 || y > GameEngine.WORLD_HEIGHT) continue;
             float screenY = y - cameraY;
-            canvas.drawLine(0, screenY, screenWidth, screenY, gridPaint);
+            canvas.drawLine(0, screenY, viewWidth, screenY, gridPaint);
         }
     }
 
-    /**
-     * 绘制世界边界
-     */
     private void drawBorder(Canvas canvas, float cameraX, float cameraY) {
         float left = 0 - cameraX;
         float top = 0 - cameraY;
@@ -365,72 +443,179 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         canvas.drawRect(left, top, right, bottom, borderPaint);
     }
 
-    /**
-     * 绘制HUD（抬头显示）
-     */
     private void drawHUD(Canvas canvas) {
         // 分数
         hudPaint.setColor(0xFFFFFFFF);
-        hudPaint.setTextSize(36f);
+        hudPaint.setTextSize(32f);
         hudPaint.setTextAlign(Paint.Align.LEFT);
-        canvas.drawText("分数: " + engine.totalScore, 20, 50, hudPaint);
+        hudPaint.setFakeBoldText(false);
+        canvas.drawText("分数: " + engine.totalScore, 20, 45, hudPaint);
 
-        // 玩家半径信息
+        // 玩家体积
         if (engine.player != null && engine.player.alive) {
-            hudPaint.setTextSize(24f);
+            hudPaint.setTextSize(22f);
             hudPaint.setColor(0xCCFFFFFF);
-            canvas.drawText("半径: " + (int) engine.player.radius, 20, 80, hudPaint);
+            canvas.drawText("体积: " + (int) engine.player.radius, 20, 72, hudPaint);
         }
 
-        // 存活AI数量
+        // 存活AI
         int aliveAI = engine.getAliveAIBalls().size();
-        hudPaint.setTextSize(24f);
+        hudPaint.setTextSize(22f);
         hudPaint.setColor(0xCCFFFFFF);
-        canvas.drawText("对手: " + aliveAI, 20, 110, hudPaint);
+        canvas.drawText("对手: " + aliveAI, 20, 97, hudPaint);
+
+        // 游戏时间（居中显示）
+        float timeLeft = Math.max(0, 300f - engine.getGameTime());
+        int minutes = (int)(timeLeft / 60);
+        int seconds = (int)(timeLeft % 60);
+        String timeStr = String.format("%d:%02d", minutes, seconds);
+        hudPaint.setTextSize(28f);
+        hudPaint.setColor(timeLeft < 60 ? 0xFFFF4444 : 0xFFFFFFFF);
+        hudPaint.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText(timeStr, screenWidth / 2f, 45, hudPaint);
+        
+        // 击杀数（右上角）
+        hudPaint.setTextSize(22f);
+        hudPaint.setColor(0xCCFFFFFF);
+        hudPaint.setTextAlign(Paint.Align.RIGHT);
+        canvas.drawText("击杀: " + engine.killCount, screenWidth - 20, 45, hudPaint);
     }
 
-    /**
-     * 绘制小地图（右下角）
-     */
     private void drawMinimap(Canvas canvas) {
-        int minimapSize = 120;
+        int minimapSize = 150;
         int padding = 15;
         int minimapX = screenWidth - minimapSize - padding;
         int minimapY = screenHeight - minimapSize - padding;
 
-        // 小地图背景
-        canvas.drawRect(minimapX, minimapY,
-                minimapX + minimapSize, minimapY + minimapSize, minimapBgPaint);
+        // 背景
+        minimapBgPaint.setColor(0x60000000);
+        canvas.drawRect(minimapX, minimapY, minimapX + minimapSize, minimapY + minimapSize, minimapBgPaint);
+        
+        // 边框
+        minimapPaint.setColor(0x80FFFFFF);
+        minimapPaint.setStyle(Paint.Style.STROKE);
+        minimapPaint.setStrokeWidth(2f);
+        canvas.drawRect(minimapX, minimapY, minimapX + minimapSize, minimapY + minimapSize, minimapPaint);
 
-        // 小地图边框
-        canvas.drawRect(minimapX, minimapY,
-                minimapX + minimapSize, minimapY + minimapSize, minimapPaint);
-
-        // 缩放比例
         float scaleX = (float) minimapSize / GameEngine.WORLD_WIDTH;
         float scaleY = (float) minimapSize / GameEngine.WORLD_HEIGHT;
 
-        // 绘制AI球在小地图上的位置
+        // 食物密集区（用淡绿色小点表示，只画部分避免性能问题）
+        minimapPaint.setColor(0x30004400);
+        minimapPaint.setStyle(Paint.Style.FILL);
+        List<Food> allFoods = engine.getAliveFoods();
+        for (int i = 0; i < allFoods.size(); i += 3) {
+            Food f = allFoods.get(i);
+            float mx = minimapX + f.x * scaleX;
+            float my = minimapY + f.y * scaleY;
+            canvas.drawCircle(mx, my, 1f, minimapPaint);
+        }
+
+        // AI球
+        minimapPaint.setStyle(Paint.Style.FILL);
         List<Ball> aiBalls = engine.getAliveAIBalls();
         for (Ball ai : aiBalls) {
             float mx = minimapX + ai.x * scaleX;
             float my = minimapY + ai.y * scaleY;
             minimapPaint.setColor(ai.color);
-            minimapPaint.setStyle(Paint.Style.FILL);
-            canvas.drawCircle(mx, my, 3f, minimapPaint);
+            float dotSize = Math.max(2f, ai.radius * scaleX * 0.5f);
+            canvas.drawCircle(mx, my, dotSize, minimapPaint);
         }
 
-        // 绘制玩家在小地图上的位置
+        // 玩家
         if (engine.player != null && engine.player.alive) {
             float px = minimapX + engine.player.x * scaleX;
             float py = minimapY + engine.player.y * scaleY;
             minimapPaint.setColor(0xFF44FF44);
-            minimapPaint.setStyle(Paint.Style.FILL);
-            canvas.drawCircle(px, py, 4f, minimapPaint);
+            float dotSize = Math.max(3f, engine.player.radius * scaleX * 0.5f);
+            canvas.drawCircle(px, py, dotSize, minimapPaint);
+        }
+    }
+
+    /**
+     * 生成粒子
+     */
+    private void spawnParticles(float x, float y, int color, int count, float speed) {
+        for (int i = 0; i < count; i++) {
+            Particle p = new Particle();
+            p.x = x; p.y = y;
+            float angle = (float)(Math.random() * Math.PI * 2);
+            float spd = speed * (0.5f + (float)Math.random() * 0.5f);
+            p.vx = (float)Math.cos(angle) * spd;
+            p.vy = (float)Math.sin(angle) * spd;
+            p.radius = 3f + (float)Math.random() * 5f;
+            p.life = 0.3f + (float)Math.random() * 0.3f;
+            p.maxLife = p.life;
+            p.color = color;
+            particles.add(p);
+        }
+    }
+
+    /**
+     * 绘制粒子
+     */
+    private void drawParticles(Canvas canvas, float cameraX, float cameraY, float viewWidth, float viewHeight) {
+        for (Particle p : particles) {
+            float screenX = p.x - cameraX;
+            float screenY = p.y - cameraY;
+            if (screenX < -20 || screenX > viewWidth + 20 || screenY < -20 || screenY > viewHeight + 20) continue;
+            float alpha = p.life / p.maxLife;
+            int a = (int)(alpha * 255);
+            ballPaint.setColor((p.color & 0x00FFFFFF) | (a << 24));
+            canvas.drawCircle(screenX, screenY, p.radius * alpha, ballPaint);
+        }
+    }
+
+    /**
+     * 绘制危险红边警告
+     */
+    private void drawDangerWarning(Canvas canvas) {
+        if (engine.player == null || !engine.player.alive) return;
+        float dangerLevel = 0f;
+        for (Ball ai : engine.getAliveAIBalls()) {
+            if (ai.radius > engine.player.radius + 5f) {
+                float dx = ai.x - engine.player.x;
+                float dy = ai.y - engine.player.y;
+                float dist = (float)Math.sqrt(dx*dx + dy*dy);
+                float dangerDist = 300f;
+                if (dist < dangerDist) {
+                    float level = 1f - dist / dangerDist;
+                    if (level > dangerLevel) dangerLevel = level;
+                }
+            }
+        }
+        if (dangerLevel > 0.1f) {
+            int alpha = (int)(dangerLevel * 100);
+            Paint dangerPaint = new Paint();
+            dangerPaint.setStyle(Paint.Style.FILL);
+            dangerPaint.setColor((alpha << 24) | 0xFF0000);
+            canvas.drawRect(0, 0, screenWidth, 30, dangerPaint); // 上
+            canvas.drawRect(0, screenHeight - 30, screenWidth, screenHeight, dangerPaint); // 下
+            canvas.drawRect(0, 0, 30, screenHeight, dangerPaint); // 左
+            canvas.drawRect(screenWidth - 30, 0, screenWidth, screenHeight, dangerPaint); // 右
+        }
+    }
+
+    /**
+     * 绘制虚拟摇杆
+     */
+    private void drawJoystick(Canvas canvas) {
+        float centerX, centerY;
+        
+        if (joystickActive) {
+            centerX = joystickCenterX;
+            centerY = joystickCenterY;
+        } else {
+            centerX = JOYSTICK_MARGIN + JOYSTICK_RADIUS;
+            centerY = screenHeight - JOYSTICK_MARGIN - JOYSTICK_RADIUS;
         }
 
-        // 恢复画笔状态
-        minimapPaint.setStyle(Paint.Style.STROKE);
-        minimapPaint.setColor(0xFFFFFFFF);
+        // 绘制背景圆
+        canvas.drawCircle(centerX, centerY, JOYSTICK_RADIUS, joystickBgPaint);
+
+        // 绘制把手
+        float stickX = joystickActive ? joystickStickX : centerX;
+        float stickY = joystickActive ? joystickStickY : centerY;
+        canvas.drawCircle(stickX, stickY, JOYSTICK_CENTER_RADIUS, joystickStickPaint);
     }
 }
