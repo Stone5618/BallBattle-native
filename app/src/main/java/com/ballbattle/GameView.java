@@ -149,7 +149,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback {
         joystickStickPaint.setColor(0xFFFFFFFF);
         joystickStickPaint.setStyle(Paint.Style.FILL);
         joystickStickPaint.setAntiAlias(true);
-        joystickStickPaint.setShadowLayer(8f, 0f, 2f, 0x40000000);
+        // 移除 shadowLayer（可能在某些设备上不兼容）
+        // joystickStickPaint.setShadowLayer(8f, 0f, 2f, 0x40000000);
 
         // 按钮画笔
         buttonPaint.setStyle(Paint.Style.FILL);

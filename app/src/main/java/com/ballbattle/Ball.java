@@ -65,8 +65,10 @@ public class Ball {
      */
     public float calculateSpeed() {
         float baseSpeed = 250f;
+        float minMass = 10f;
+        float effectiveMass = Math.max(minMass, mass);
         // 指数衰减：speed = baseSpeed * 0.98^(mass/100)
-        return baseSpeed * (float)Math.pow(0.98, mass / 100f);
+        return baseSpeed * (float)Math.pow(0.98, effectiveMass / 100f);
     }
 
     /**
@@ -155,6 +157,7 @@ public class Ball {
      */
     public void decayMass(float deltaTime) {
         mass *= Math.pow(0.998, deltaTime);
+        if (mass < 10f) mass = 10f;  // 最小质量保护
         radius = 10f * (float)Math.sqrt(mass);
         speed = calculateSpeed();
     }
